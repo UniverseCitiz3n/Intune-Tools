@@ -14,4 +14,4 @@ jobs:
         NUGET_KEY: ${{ secrets.NUGET_KEY }}
       shell: pwsh
       run: |
-        Publish-Script -Path .\Scripts\Get-IntuneDevice.ps1 -NuGetApiKey $env:NUGET_KEY -Verbose
+        Publish-Script -Path .\Scripts\Get-IntuneDevices.ps1 -NuGetApiKey $env:NUGET_KEY -Verbose
