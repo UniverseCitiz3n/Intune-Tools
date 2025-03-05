@@ -11,7 +11,7 @@
 
     Prompts for a Group ID or Azure AD URL and returns Intune-managed device details.
 .NOTES
-    Author: Your Name
+    Author: Maciej Horbacz
     Version: 1.0.0
     PowerShell Gallery: https://www.powershellgallery.com/packages/Get-IntuneDevices
 #>
