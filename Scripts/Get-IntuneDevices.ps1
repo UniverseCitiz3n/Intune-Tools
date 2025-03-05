@@ -1,19 +1,28 @@
+<#PSScriptInfo
+.VERSION 1.0.0
+.GUID 8d673f7d-8c81-4c51-a088-0b1c6c2ff4ee
+.AUTHOR Maciej Horbacz 
+.COMPANYNAME CloudAligned
+.COPYRIGHT (c) 2025 Maciej. All rights reserved.
+.TAGS Intune MicrosoftGraph EndpointManagement
+.LICENSEURI https://github.com/UniverseCitiz3n/Intune-Tools/blob/main/LICENSE
+.PROJECTURI https://github.com/UniverseCitiz3n/Intune-Tools
+#>
+
 <#
 .SYNOPSIS
-    Retrieves Intune-managed device information from a specific Azure AD group.
+Retrieves Intune-managed device information based on Azure AD group membership.
 
 .DESCRIPTION
-    This script retrieves detailed information about devices managed by Microsoft Intune (Microsoft Endpoint Manager). 
-    It queries devices based on Azure AD group memberships using the Microsoft Graph API. It optionally supports authentication via an existing Microsoft Graph API access token.
+This script provides a simple interactive text menu to retrieve detailed information about devices managed by Microsoft Intune (Microsoft Endpoint Manager) associated with a specific Azure AD group. It fetches device details using Microsoft Graph API, with optional support for authentication via an existing Graph API access token.
 
 .EXAMPLE
-    .\Get-IntuneDevices.ps1
+.\Get-IntuneDevices.ps1
+Runs interactively, prompting for an Azure AD group link or GUID.
 
-    Prompts for a Group ID or Azure AD URL and returns Intune-managed device details.
 .NOTES
-    Author: Maciej Horbacz
-    Version: 1.0.0
-    PowerShell Gallery: https://www.powershellgallery.com/packages/Get-IntuneDevices
+Author: Maciej Horbacz 
+Version: 1.0.0
 #>
 function Get-IntuneDevices {
     [CmdletBinding()]
