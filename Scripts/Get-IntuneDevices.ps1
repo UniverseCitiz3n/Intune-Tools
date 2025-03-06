@@ -1,25 +1,33 @@
 
 <#PSScriptInfo
 
-.VERSION 1.0.0
+.VERSION
+1.0.0
 
-.GUID e00cc407-4231-4af7-a226-f2a9b28395f3
+.GUID
+e00cc407-4231-4af7-a226-f2a9b28395f3
 
-.AUTHOR Maciej Horbacz
+.AUTHOR
+Maciej Horbacz
 
-.COMPANYNAME Cloud Aligned
+.COMPANYNAME
+Cloud Aligned
 
-.COPYRIGHT (c) 2025 Maciej. All rights reserved.
+.COPYRIGHT
+(c) 2025 Maciej. All rights reserved.
 
-.TAGS Intune, Microsoft Graph, Devices, Entra ID
+.TAGS
+Intune, Microsoft Graph, Devices, Entra ID
 
 .LICENSEURI
 
-.PROJECTURI https://github.com/UniverseCitiz3n/Intune-Tools
+.PROJECTURI
+https://github.com/UniverseCitiz3n/Intune-Tools
 
 .ICONURI
 
-.EXTERNALMODULEDEPENDENCIES  Microsoft.Graph.Authentication
+.EXTERNALMODULEDEPENDENCIES 
+Microsoft.Graph.Authentication
 
 .REQUIREDSCRIPTS
 
