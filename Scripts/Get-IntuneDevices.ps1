@@ -1,44 +1,69 @@
+
 <#PSScriptInfo
+
 .VERSION 1.0.0
-.GUID 8d673f7d-8c81-4c51-a088-0b1c6c2ff4ee
-.AUTHOR Maciej Horbacz 
-.COMPANYNAME CloudAligned
+
+.GUID e00cc407-4231-4af7-a226-f2a9b28395f3
+
+.AUTHOR Maciej Horbacz
+
+.COMPANYNAME Cloud Aligned
+
 .COPYRIGHT (c) 2025 Maciej. All rights reserved.
-.TAGS Intune MicrosoftGraph EndpointManagement
-.LICENSEURI https://github.com/UniverseCitiz3n/Intune-Tools/blob/main/LICENSE
+
+.TAGS Intune, Microsoft Graph, Devices, Entra ID
+
+.LICENSEURI
+
 .PROJECTURI https://github.com/UniverseCitiz3n/Intune-Tools
-#>
 
-<#
-.SYNOPSIS
-Retrieves Intune-managed device information based on Azure AD group membership.
+.ICONURI
 
-.DESCRIPTION
-This script provides a simple interactive text menu to retrieve detailed information about devices managed by Microsoft Intune (Microsoft Endpoint Manager) associated with a specific Azure AD group. It fetches device details using Microsoft Graph API, with optional support for authentication via an existing Graph API access token.
+.EXTERNALMODULEDEPENDENCIES  Microsoft.Graph.Authentication
 
-.EXAMPLE
-.\Get-IntuneDevices.ps1
-Runs interactively, prompting for an Azure AD group link or GUID.
+.REQUIREDSCRIPTS
 
-.NOTES
-Author: Maciej Horbacz 
-Version: 1.0.0
+.EXTERNALSCRIPTDEPENDENCIES
+
+.RELEASENOTES
+    Initial version.
+
+.PRIVATEDATA
+
 #>
 function Get-IntuneDevices {
     [CmdletBinding()]
     Param(
         [Parameter(Mandatory = $false)]
-        [string]$AccessToken
+        [string]$AccessToken,
+        [Parameter(Mandatory = $false)]
+        [string]$TenantID
     )
 
+    # Ensure only one connection parameter is used
+    if ($AccessToken -and $TenantID) {
+        Write-Error "Provide either AccessToken or TenantID, not both."
+        return
+    }
 
-    # Establish connection
     if ($AccessToken) {
         $AccessToken = $AccessToken.Trim()
         $headers = @{
             "Authorization" = "$AccessToken"
             "Content-Type"  = "application/json"
         }
+    } elseif ($TenantID) {
+        try {
+            Import-Module Microsoft.Graph.Authentication
+            Connect-MgGraph -NoWelcome -TenantId $TenantID -Scopes "DeviceManagementManagedDevices.Read.All", "Group.Read.All", "User.Read.All", "GroupMember.Read.All" -ErrorAction Stop
+            Write-Host "Connected to tenant $TenantID."
+        } catch {
+            Write-Error "Failed to connect to Microsoft Graph: $_"
+            return
+        }
+    } else {
+        Write-Error "No connection information provided. Run menu option 1 first."
+        return
     }
 
     # Get group ID from input
@@ -59,7 +84,38 @@ function Get-IntuneDevices {
         if ($AccessToken) {
             $groupMembers = (Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/groups/$groupId/members" -Headers $headers -Method GET).value
         } else {
-            $groupMembers = Get-MgGroupMember -GroupId $groupId -All
+            # First, retrieve a temporary list to determine member types
+            $tempMembers = Get-MgGroupMember -GroupId $groupId -All
+            $hasUser = $false
+            $hasDevice = $false
+            foreach ($m in $tempMembers) {
+                if ($m.AdditionalProperties.'@odata.type' -eq "#microsoft.graph.user") {
+                    $hasUser = $true
+                } elseif ($m.AdditionalProperties.'@odata.type' -eq "#microsoft.graph.device") {
+                    $hasDevice = $true
+                }
+            }
+
+            # Retrieve members with appropriate functions based on detected types
+            $groupMembers = @()
+            if ($hasUser) {
+                $users = Get-MgGroupMemberAsUser -GroupId $groupId -All
+                foreach ($user in $users) {
+                    if (-not $user.'@odata.type') {
+                        $user | Add-Member -NotePropertyName '@odata.type' -NotePropertyValue "#microsoft.graph.user" -Force
+                    }
+                }
+                $groupMembers += $users
+            }
+            if ($hasDevice) {
+                $devices = Get-MgGroupMemberAsDevice -GroupId $groupId -All
+                foreach ($device in $devices) {
+                    if (-not $device.'@odata.type') {
+                        $device | Add-Member -NotePropertyName '@odata.type' -NotePropertyValue "#microsoft.graph.device" -Force
+                    }
+                }
+                $groupMembers += $devices
+            }
         }
     } catch {
         Write-Error "Error retrieving group members: $_"
@@ -78,6 +134,7 @@ function Get-IntuneDevices {
             $deviceId = $member.deviceId
             if (-not $deviceId) {
                 Write-Error "Device ID not found for member $($member.id). Skipping." 
+                continue
             }
             try {
                 if ($AccessToken) {
@@ -87,7 +144,9 @@ function Get-IntuneDevices {
                     $uri = "https://graph.microsoft.com/beta/deviceManagement/manageddevices?`$filter=$filter"
                     $deviceDetail = (Invoke-RestMethod -Uri $uri -Headers $headers -Method GET).value
                 } else {
-                    $deviceDetail = Get-MgDeviceManagementManagedDevice -Filter "deviceId eq '$deviceId'"
+                    Write-Host "Processing device ID: $deviceId"
+                    $filter = "contains(azureADDeviceId, '$deviceId')"
+                    $deviceDetail = Get-MgDeviceManagementManagedDevice -Filter $filter
                 }
             } catch {
                 Write-Warning "Unable to get Intune details for device id $deviceId"
@@ -114,9 +173,11 @@ function Get-IntuneDevices {
             $userUpn = $member.userPrincipalName
             try {
                 if ($AccessToken) {
+                    Write-Host "Processing user: $userUpn"
                     $deviceDetail = (Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceManagement/managedDevices?`$filter=UserPrincipalName eq '$userUpn'" -Headers $headers -Method GET).value
                 } else {
-                    $deviceDetail = (Get-MgDeviceManagementManagedDevice -Filter "UserPrincipalName eq '$userUpn'").value
+                    Write-Host "Processing user: $userUpn"
+                    $deviceDetail = Get-MgDeviceManagementManagedDevice -Filter "UserPrincipalName eq '$userUpn'"
                 }
             } catch {
                 Write-Warning "Unable to get devices for user $userUpn"
@@ -148,18 +209,15 @@ function Get-IntuneDevices {
     return $deviceResults
 }
 
-# Usage example:
-# $devices = Get-IntuneDevices
-# $devices | Format-Table -AutoSize
-
 # Initialize global variables
 $global:devices = $null
 $global:AccessToken = $null
+$global:Tenant = $null
 Clear-Host
 do {
     Write-Host ""
     Write-Host "Select an option:"
-    Write-Host "1. Connect to Tenant (or use AccessToken)"
+    Write-Host "1. Set Tenant or AccessToken"
     Write-Host "2. Disconnect from Tenant"
     Write-Host "3. Check group"
     Write-Host "4. Show devices as table"
@@ -170,52 +228,59 @@ do {
     
     switch ($choice) {
         "1" {
-            $inputValue = Read-Host "Enter your tenant ID, domain, or paste AccessToken"
+            $inputValue = Read-Host "Enter your AccessToken (if it contains a dot) or your tenant ID/domain"
             if ($inputValue -match "\.") {
-                # The input likely is an AccessToken (contains dot separator)
                 $global:AccessToken = $inputValue.Trim()
+                $global:Tenant = $null
                 Write-Host "AccessToken stored."
             } else {
-                # Assume the input is a tenant ID or domain
-                try {
-                    Connect-MgGraph -TenantId $inputValue -Scopes "DeviceManagementManagedDevices.Read.All", "Group.Read.All", "User.Read.All", "GroupMember.Read.All" -ErrorAction Stop
-                    $global:AccessToken = $null
-                } catch {
-                    Write-Error "Failed to connect: $_"
-                }
+                $global:Tenant = $inputValue.Trim()
+                $global:AccessToken = $null
+                Write-Host "Tenant info stored."
             }
         }
         "2" {
             try {
                 Disconnect-MgGraph
                 Write-Host "Disconnected from tenant."
+                $global:Tenant = $null
                 $global:AccessToken = $null
             } catch {
                 Write-Error "Failed to disconnect: $_"
             }
         }
         "3" {
-            $global:devices = Get-IntuneDevices -AccessToken $global:AccessToken
-            if ($global:devices) {
-                Write-Host "Device details retrieved."
+            if (-not $global:AccessToken -and -not $global:Tenant) {
+                Write-Host "No connection established. Please run option 1 first."
+            } else {
+                if ($global:AccessToken) {
+                    $global:devices = Get-IntuneDevices -AccessToken $global:AccessToken
+                } else {
+                    $global:devices = Get-IntuneDevices -TenantID $global:Tenant
+                }
+                if ($global:devices) {
+                    Write-Host "Device details retrieved."
+                }
             }
         }
         "4" {
-            if (@($global:devices).Count -gt 0) {
-                $global:devices | Format-Table -AutoSize
+            if (-not $global:devices -or $global:devices.Count -eq 0) {
+                Write-Host "No devices loaded. Please run option 3 first."
             } else {
-                Write-Error "No device data available. Run option 3 first."
+                $global:devices | Format-Table -AutoSize
             }
         }
         "5" {
-            if (@($global:devices).Count -gt 0) {
-                $global:devices | Format-List *
+            if (-not $global:devices -or $global:devices.Count -eq 0) {
+                Write-Host "No devices loaded. Please run option 3 first."
             } else {
-                Write-Error "No device data available. Run option 3 first."
+                $global:devices | Format-List *
             }
         }
         "6" {
-            if ($global:devices -and $global:devices.Count -gt 0) {
+            if (-not $global:devices -or $global:devices.Count -eq 0) {
+                Write-Host "No devices loaded. Please run option 3 first."
+            } else {
                 $csvPath = Read-Host "Enter the full path for CSV export"
                 try {
                     $global:devices | Export-Csv -Path $csvPath -NoTypeInformation -Force
@@ -223,8 +288,6 @@ do {
                 } catch {
                     Write-Error "Export failed: $_"
                 }
-            } else {
-                Write-Error "No device data available. Run option 3 first."
             }
         }
         "7" {
