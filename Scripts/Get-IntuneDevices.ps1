@@ -1,47 +1,33 @@
 <#PSScriptInfo
-
 .VERSION
 1.0.1
-
 .GUID
 e00cc407-4231-4af7-a226-f2a9b28395f3
-
 .AUTHOR
 Maciej Horbacz
-
+.SYNOPSIS
+Retrieves Intune device details via the Microsoft Graph API.
 .DESCRIPTION
 This script leverages the Microsoft Graph API to retrieve detailed information about devices managed by Intune.
 It allows users to specify an Entra ID group (group can contain users and/or devices), from which it extracts device details, which can be displayed as a table or list, or exported to a CSV file.
-
 .COMPANYNAME
 Cloud Aligned
-
 .COPYRIGHT
 (c) 2025 Maciej. All rights reserved.
-
 .TAGS
 Intune, MicrosoftGraph, Devices, EntraID
-
 .LICENSEURI
-
 .PROJECTURI
 https://github.com/UniverseCitiz3n/Intune-Tools
-
 .ICONURI
-
 .EXTERNALMODULEDEPENDENCIES 
 @('Microsoft.Graph.Authentication','Microsoft.Graph.DeviceManagement','Microsoft.Graph.Groups')
-
 .REQUIREDSCRIPTS
-
 .EXTERNALSCRIPTDEPENDENCIES
-
 .RELEASENOTES
     v1.0.0 - Initial version.
     v1.0.1 - Minor bug fix.
-
 .PRIVATEDATA
-
 #>
 function Get-IntuneDevices {
     [CmdletBinding()]
