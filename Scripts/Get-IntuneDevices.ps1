@@ -1,4 +1,3 @@
-
 <#PSScriptInfo
 
 .VERSION
@@ -9,6 +8,9 @@ e00cc407-4231-4af7-a226-f2a9b28395f3
 
 .AUTHOR
 Maciej Horbacz
+
+.DESCRIPTION
+"This script retrieves device details from Intune using Microsoft Graph API."
 
 .COMPANYNAME
 Cloud Aligned
