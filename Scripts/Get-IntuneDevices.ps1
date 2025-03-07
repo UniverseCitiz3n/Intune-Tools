@@ -33,7 +33,7 @@ https://github.com/UniverseCitiz3n/Intune-Tools
 .ICONURI
 
 .EXTERNALMODULEDEPENDENCIES 
-@("Microsoft.Graph.Authentication","Microsoft.Graph.DeviceManagement","Microsoft.Graph.Groups")
+"Microsoft.Graph.Authentication","Microsoft.Graph.DeviceManagement","Microsoft.Graph.Groups"
 
 .REQUIREDSCRIPTS
 
