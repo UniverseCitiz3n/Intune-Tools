@@ -1,6 +1,6 @@
 <#PSScriptInfo
 .VERSION
-1.0.3
+1.0.4
 
 .GUID
 e00cc407-4231-4af7-a226-f2a9b28395f3
@@ -44,6 +44,7 @@ Microsoft.Graph
     v1.0.1 - Minor bug fix.
     v1.0.2 - Minor bug fix.
     v1.0.3 - Minor bug fix.
+    v1.0.4 - Microsoft.Graph as required.
    
 .PRIVATEDATA
 #>
