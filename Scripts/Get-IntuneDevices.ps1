@@ -13,8 +13,7 @@ Retrieves Intune device details via the Microsoft Graph API.
 
 
 .DESCRIPTION
-This script leverages the Microsoft Graph API to retrieve detailed information about devices managed by Intune.
-It allows users to specify an Entra ID group (group can contain users and/or devices), from which it extracts device details, which can be displayed as a table or list, or exported to a CSV file.
+This script leverages the Microsoft Graph API to retrieve detailed information about devices managed by Intune. It allows users to specify an Entra ID group (group can contain users and/or devices), from which it extracts device details, which can be displayed as a table or list, or exported to a CSV file.
 
 
 .COMPANYNAME
