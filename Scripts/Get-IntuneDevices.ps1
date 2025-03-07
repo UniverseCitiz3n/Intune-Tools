@@ -20,7 +20,7 @@ Cloud Aligned
 (c) 2025 Maciej. All rights reserved.
 
 .TAGS
-Intune, Microsoft Graph, Devices, EntraID
+Intune, MicrosoftGraph, Devices, EntraID
 
 .LICENSEURI
 
@@ -37,7 +37,8 @@ https://github.com/UniverseCitiz3n/Intune-Tools
 .EXTERNALSCRIPTDEPENDENCIES
 
 .RELEASENOTES
-    Initial version.
+    v1.0.0 - Initial version.
+    v1.0.1 - Minor bug fix.
 
 .PRIVATEDATA
 
