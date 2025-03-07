@@ -1,6 +1,6 @@
 <#PSScriptInfo
 .VERSION
-1.0.1
+1.0.2
 
 .GUID
 e00cc407-4231-4af7-a226-f2a9b28395f3
@@ -42,6 +42,7 @@ https://github.com/UniverseCitiz3n/Intune-Tools
 .RELEASENOTES
     v1.0.0 - Initial version.
     v1.0.1 - Minor bug fix.
+    v1.0.2 - Minor bug fix.
    
 .PRIVATEDATA
 #>
