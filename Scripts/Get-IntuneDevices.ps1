@@ -1,6 +1,6 @@
 <#PSScriptInfo
 .VERSION
-1.0.4
+1.0.5
 
 .GUID
 e00cc407-4231-4af7-a226-f2a9b28395f3
@@ -45,9 +45,68 @@ Microsoft.Graph
     v1.0.2 - Minor bug fix.
     v1.0.3 - Minor bug fix.
     v1.0.4 - Microsoft.Graph as required.
+    v1.0.5 - Added Invoke-RecurenceRestMethod, added quicker way to resolve Intune device if group member count is over 50.
    
 .PRIVATEDATA
 #>
+#region Function Invoke-RecurenceRestMethod
+function Invoke-RecurenceRestMethod {
+    param (
+        $Uri,
+        $Headers,
+        $Method = 'Get',
+        $ContentType = "application/json"
+    )
+
+    $irmSplat = @{
+        Uri             = $Uri
+        Headers         = $Headers
+        Method          = $Method
+        ContentType     = $ContentType
+        UseBasicParsing = $true
+    }
+    #Write-Output ('Processing URI {0}' -f $irmSplat.Uri)
+
+    $QueryRequest = @()
+    $QueryResult = @()
+
+    $QueryRequest = Invoke-RestMethod @irmSplat
+
+    if ($QueryRequest.value) {
+        $QueryResult = $QueryRequest.value
+    } else {
+        $QueryResult = $QueryRequest
+    }
+
+    # Determine total count if available, else zero
+    $totalCount = 0
+    if ($QueryRequest.'@odata.count') {
+        $totalCount = [int]$QueryRequest.'@odata.count'
+    }
+
+    $chunkCounter = 1
+    if ($Uri -notlike "*`$top*") {
+        while ($QueryRequest.PSobject.Properties.Name.Contains('@odata.nextLink') -and $QueryRequest.'@odata.nextLink') {
+            $irmSplat.Uri = $QueryRequest.'@odata.nextLink'
+            $chunkCounter++
+            if ($totalCount -gt 0) {
+                $percent = [math]::Round(($QueryResult.Count / $totalCount) * 100)
+            } else {
+                $percent = $chunkCounter * 10
+                if ($percent -gt 100) { $percent = 100 }
+            }
+            Write-Progress -Activity "Fetching data" -Status "Chunk $chunkCounter (fetched $($QueryResult.Count) record(s) of $totalCount)" -PercentComplete $percent
+            $QueryRequest = Invoke-RestMethod @irmSplat
+            if ($QueryRequest.value) {
+                $QueryResult += $QueryRequest.value
+            } else {
+                $QueryResult += $QueryRequest
+            }
+        }
+    }
+    $QueryResult
+}
+#endregion
 function Get-IntuneDevices {
     [CmdletBinding()]
     Param(
@@ -69,11 +128,9 @@ function Get-IntuneDevices {
             "Authorization" = "$AccessToken"
             "Content-Type"  = "application/json"
         }
-    }
-    elseif ($TenantID) {
+    } elseif ($TenantID) {
         # No additional headers needed as the connection is already established using TenantID
-    }
-    else {
+    } else {
         Write-Error "No connection information provided. Run menu option 1 first."
         return
     }
@@ -83,12 +140,10 @@ function Get-IntuneDevices {
     if ($groupInput -match "groupid/([0-9a-fA-F\-]+)") {
         $groupId = $matches[1]
         Write-Host "Detected group ID: $groupId"
-    }
-    elseif ($groupInput -match "^(?:\{)?[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}(?:\})?$") {
+    } elseif ($groupInput -match "^(?:\{)?[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}(?:\})?$") {
         $groupId = $groupInput
         Write-Host "Detected group GUID: $groupId"
-    }
-    else {
+    } else {
         Write-Error "Invalid group link or GUID."
         return
     }
@@ -96,9 +151,8 @@ function Get-IntuneDevices {
     # Retrieve group members
     try {
         if ($AccessToken) {
-            $groupMembers = (Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/groups/$groupId/members" -Headers $headers -Method GET).value
-        }
-        else {
+            $groupMembers = (Invoke-RecurenceRestMethod -Uri "https://graph.microsoft.com/beta/groups/$groupId/members" -Headers $headers -Method GET)
+        } else {
             # First, retrieve a temporary list to determine member types
             $tempMembers = Get-MgGroupMember -GroupId $groupId -All
             $hasUser = $false
@@ -106,8 +160,7 @@ function Get-IntuneDevices {
             foreach ($m in $tempMembers) {
                 if ($m.AdditionalProperties.'@odata.type' -eq "#microsoft.graph.user") {
                     $hasUser = $true
-                }
-                elseif ($m.AdditionalProperties.'@odata.type' -eq "#microsoft.graph.device") {
+                } elseif ($m.AdditionalProperties.'@odata.type' -eq "#microsoft.graph.device") {
                     $hasDevice = $true
                 }
             }
@@ -133,15 +186,33 @@ function Get-IntuneDevices {
                 $groupMembers += $devices
             }
         }
-    }
-    catch {
+    } catch {
         Write-Error "Error retrieving group members: $_"
         return
     }
 
-    $deviceResults = @()
+    # New optimization: if the total group members count is over 50, retrieve all managed devices once and filter in memory.
+    if ($groupMembers.Count -gt 50) {
+        try {
+            Write-Host "Large group detected ($($groupMembers.Count) members). Retrieving all managed devices..."
+            if ($AccessToken) {
+                $allDevices = (Invoke-RecurenceRestMethod -Uri "https://graph.microsoft.com/beta/deviceManagement/manageddevices" -Headers $headers -Method GET)
+            } else {
+                $allDevices = Get-MgDeviceManagementManagedDevice -All
+            }
+        } catch {
+            Write-Warning "Failed retrieving all managed devices: $_. Continuing with individual requests."
+        }
+    }
 
+    $deviceResults = @()
+    # Add progress feedback for processing group members
+    $totalMembers = $groupMembers.Count
+    $i = 0
     foreach ($member in $groupMembers) {
+        $i++
+        $p = [Math]::Round(($i / $totalMembers) * 100)
+        Write-Progress -Activity "Processing group members" -Status "Processing member $i of $totalMembers" -PercentComplete $p
         $memberType = $member.'@odata.type'
         if (-not $memberType -and $member.userPrincipalName) {
             $memberType = "#microsoft.graph.user"
@@ -153,23 +224,26 @@ function Get-IntuneDevices {
                 Write-Error "Device ID not found for member $($member.id). Skipping." 
                 continue
             }
-            try {
-                if ($AccessToken) {
-                    Write-Host "Processing device ID: $deviceId"
-                    # Use the custom filter instead of device-specific filter
-                    $filter = "contains(azureADDeviceId, '$deviceId')" 
-                    $uri = "https://graph.microsoft.com/beta/deviceManagement/manageddevices?`$filter=$filter"
-                    $deviceDetail = (Invoke-RestMethod -Uri $uri -Headers $headers -Method GET).value
+
+            if ($allDevices) {
+                Write-Progress -Activity "Processing devices" -Status "Processing device ID: $deviceId"
+                $deviceDetail = $allDevices | Where-Object { $_.azureADDeviceId -like "*$deviceId*" }
+            } else {
+                Write-Host "Processing device ID: $deviceId"
+                try {
+                    if ($AccessToken) {
+                        # Use the custom filter instead of device-specific filter
+                        $filter = "contains(azureADDeviceId, '$deviceId')" 
+                        $uri = "https://graph.microsoft.com/beta/deviceManagement/manageddevices?`$filter=$filter"
+                        $deviceDetail = (Invoke-RecurenceRestMethod -Uri $uri -Headers $headers -Method GET)
+                    } else {
+                        $filter = "contains(azureADDeviceId, '$deviceId')"
+                        $deviceDetail = Get-MgDeviceManagementManagedDevice -Filter $filter
+                    }
+                } catch {
+                    Write-Warning "Unable to get Intune details for device id $deviceId"
+                    continue
                 }
-                else {
-                    Write-Host "Processing device ID: $deviceId"
-                    $filter = "contains(azureADDeviceId, '$deviceId')"
-                    $deviceDetail = Get-MgDeviceManagementManagedDevice -Filter $filter
-                }
-            }
-            catch {
-                Write-Warning "Unable to get Intune details for device id $deviceId"
-                continue
             }
             foreach ($dev in $deviceDetail) {
                 $deviceResults += [PSCustomObject]@{
@@ -188,22 +262,23 @@ function Get-IntuneDevices {
                     EntraID        = $dev.azureADDeviceId
                 }
             }
-        }
-        elseif ($memberType -eq "#microsoft.graph.user") {
+        } elseif ($memberType -eq "#microsoft.graph.user") {
             $userUpn = $member.userPrincipalName
-            try {
-                if ($AccessToken) {
-                    Write-Host "Processing user: $userUpn"
-                    $deviceDetail = (Invoke-RestMethod -Uri "https://graph.microsoft.com/beta/deviceManagement/managedDevices?`$filter=UserPrincipalName eq '$userUpn'" -Headers $headers -Method GET).value
+            if ($allDevices) {
+                Write-Progress -Activity "Processing users" -Status "Processing user: $userUpn"
+                $deviceDetail = $allDevices | Where-Object { $_.userPrincipalName -eq $userUpn }
+            } else {
+                Write-Host "Processing user: $userUpn"
+                try {
+                    if ($AccessToken) {
+                        $deviceDetail = (Invoke-RecurenceRestMethod -Uri "https://graph.microsoft.com/beta/deviceManagement/manageddevices?`$filter=UserPrincipalName eq '$userUpn'" -Headers $headers -Method GET)
+                    } else {
+                        $deviceDetail = Get-MgDeviceManagementManagedDevice -Filter "UserPrincipalName eq '$userUpn'"
+                    }
+                } catch {
+                    Write-Warning "Unable to get devices for user $userUpn"
+                    continue
                 }
-                else {
-                    Write-Host "Processing user: $userUpn"
-                    $deviceDetail = Get-MgDeviceManagementManagedDevice -Filter "UserPrincipalName eq '$userUpn'"
-                }
-            }
-            catch {
-                Write-Warning "Unable to get devices for user $userUpn"
-                continue
             }
             foreach ($dev in $deviceDetail) {
                 $deviceResults += [PSCustomObject]@{
@@ -222,8 +297,7 @@ function Get-IntuneDevices {
                     EntraID        = $dev.azureADDeviceId
                 }
             }
-        }
-        else {
+        } else {
             Write-Host "Skipping member with id $($member.id) and type $memberType."
         }
     }
@@ -256,16 +330,14 @@ do {
                 $AccessToken = $inputValue.Trim()
                 $Tenant = $null
                 Write-Host "AccessToken stored."
-            }
-            else {
+            } else {
                 try {
                     $AccessToken = $null
                     $Tenant = $inputValue.Trim()
                     Import-Module Microsoft.Graph.Authentication
                     Connect-MgGraph -NoWelcome -TenantId $Tenant -Scopes "DeviceManagementManagedDevices.Read.All", "Group.Read.All", "User.Read.All", "GroupMember.Read.All" -ErrorAction Stop
                     Write-Host "Connected to tenant $Tenant."
-                }
-                catch {
+                } catch {
                     Write-Error "Failed to connect to Microsoft Graph: $_"
                     return
                 }
@@ -277,20 +349,17 @@ do {
                 Write-Host "Disconnected from tenant."
                 $Tenant = $null
                 $AccessToken = $null
-            }
-            catch {
+            } catch {
                 Write-Error "Failed to disconnect: $_"
             }
         }
         "3" {
             if (-not $AccessToken -and -not $Tenant) {
                 Write-Host "No connection established. Please run option 1 first."
-            }
-            else {
+            } else {
                 if ($AccessToken) {
                     $devices = Get-IntuneDevices -AccessToken $AccessToken
-                }
-                else {
+                } else {
                     $devices = Get-IntuneDevices -TenantID $Tenant
                 }
                 if ($devices) {
@@ -301,30 +370,26 @@ do {
         "4" {
             if (-not $devices -or $devices.Count -eq 0) {
                 Write-Host "No devices loaded. Please run option 3 first."
-            }
-            else {
+            } else {
                 $devices | Format-Table -AutoSize
             }
         }
         "5" {
             if (-not $devices -or $devices.Count -eq 0) {
                 Write-Host "No devices loaded. Please run option 3 first."
-            }
-            else {
+            } else {
                 $devices | Format-List *
             }
         }
         "6" {
             if (-not $devices -or $devices.Count -eq 0) {
                 Write-Host "No devices loaded. Please run option 3 first."
-            }
-            else {
+            } else {
                 $csvPath = Read-Host "Enter the full path for CSV export"
                 try {
                     $devices | Export-Csv -Path $csvPath -NoTypeInformation -Force
                     Write-Host "Exported device details to $csvPath."
-                }
-                catch {
+                } catch {
                     Write-Error "Export failed: $_"
                 }
             }
@@ -333,12 +398,11 @@ do {
             $response = Read-Host "Do you want to keep devices in current session? (y/n)"
             if ($response -notmatch '^(y|Y)$') {
                 $devices = $null
-            }
-            else {
+            } else {
                 Write-Host 'Device details are in $devices'
             }
             $AccessToken = $null
-            exit
+            break
         }
         default {
             Write-Host "Invalid option. Try again." 
