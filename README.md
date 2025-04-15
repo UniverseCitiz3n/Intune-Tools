@@ -117,8 +117,6 @@ Some parts were built with AI assistance. If it breaks, it might be my fault—o
 
 ![IACT](assets/IACT%204.png)
 
-![IACT](assets/IACT%205.png)
-
 ![IACT](assets/IACT%206.png)
 
 ![IACT](assets/IACT%207.png)
