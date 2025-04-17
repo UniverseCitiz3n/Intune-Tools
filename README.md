@@ -67,6 +67,8 @@ Enter choice (1-7):
 ____
 ## Intune Admin Center Tools
 
+[Download here](https://github.com/UniverseCitiz3n/Intune-Tools/blob/main/Extension/Intune%20Admin%20Center%20Tools%201.0.zip) 
+
 A browser extension that brings useful features Microsoft should've included in the first place. Built openly, without marketing fluff or red tape — just practical tools for real admins.
 
 ⚠️ Security Advisory
