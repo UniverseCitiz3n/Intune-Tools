@@ -81,11 +81,11 @@ Read the code. Trust your gut. It's public software from a developer on the inte
 
 Once you're viewing a device in Intune Admin Center, open the extension to:
 
-× Group Management
-  × Search Azure AD groups by name
-  × Add or remove the current device from groups
-  × Create new security groups (non-mail-enabled)
-× Configuration Assignments
+* Group Management
+  * Search Azure AD groups by name
+  * Add or remove the current device from groups
+  * Create new security groups (non-mail-enabled)
+* Configuration Assignments
   * View device config profiles and assigned groups
 * Compliance Policies
   * Inspect compliance policies and their targets
