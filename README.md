@@ -67,7 +67,7 @@ Enter choice (1-7):
 ____
 ## Intune Admin Center Tools
 
-[Download here](https://github.com/UniverseCitiz3n/Intune-Tools/blob/main/Extension/Intune%20Admin%20Center%20Tools%201.0.zip) 
+https://microsoftedge.microsoft.com/addons/detail/intune-admin-center-tools/iglpbhebeofeaiimjejamnicpfdagnhk
 
 A browser extension that brings useful features Microsoft should've included in the first place. Built openly, without marketing fluff or red tape — just practical tools for real admins.
 
@@ -131,9 +131,13 @@ Some parts were built with AI assistance. If it breaks, it might be my fault—o
 
 ![IACT](assets/IACT%2011.png)
 
+### Installation MS Edge Store
+
+https://microsoftedge.microsoft.com/addons/detail/intune-admin-center-tools/iglpbhebeofeaiimjejamnicpfdagnhk
+
 ### Installation (Developer Mode)
 
-1. Download or clone this repo
+1. Download or clone this repo - [Download here](https://github.com/UniverseCitiz3n/Intune-Tools/blob/main/Extension/Intune%20Admin%20Center%20Tools%201.0.zip) 
 2. Go to chrome://extensions or edge://extensions
 3. Enable Developer Mode
 4. Click Load unpacked
