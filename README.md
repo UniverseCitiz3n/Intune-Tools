@@ -143,7 +143,7 @@ Some parts were built with AI assistance. If it breaks, it might be my fault—o
 
 1. Create new key `ExtensionInstallForcelist` in this location `HKEY_LOCAL_MACHINE\SOFTWARE\Policies\Microsoft\Edge`
 2. In this key create `REG_SZ` value name 1 (or other value if there are already some forced extensions)
-3. In value data paste this string `idfmeoofinbncikceiogjeikkaaeooia;https://uc3nintunestore.blob.core.windows.net/extension/Intune%20Admin%20Center%20Tools%201.0.xml`
+3. In value data paste this string `idfmeoofinbncikceiogjeikkaaeooia;https://uc3nintunestore.blob.core.windows.net/extension/Intune%20Admin%20Center%20Tools.xml`
 4. Restart Edge
 
 >NOTE Link directs to my Azure Blob storage, if you wish to host it on your blob you need to create .crx and .xml files based on my contents
