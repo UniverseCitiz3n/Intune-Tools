@@ -186,8 +186,7 @@
       height: auto;
       line-height: 20px;
     }
-    
-    /* Table styling */
+      /* Table styling */
     table.striped > tbody > tr:nth-child(odd) {
       background-color: var(--table-stripe);
     }
@@ -198,6 +197,36 @@
     
     .sortable:hover {
       background-color: var(--table-hover);
+    }
+      /* Table row selection styling */
+    .table-row-selectable {
+      cursor: pointer;
+      transition: background-color 0.2s ease;
+      user-select: none;
+    }
+    
+    .table-row-selectable:hover {
+      background-color: var(--table-hover) !important;
+    }
+    
+    .table-row-selected {
+      background-color: rgba(38, 166, 154, 0.3) !important;
+      border-left: 3px solid #26c6da;
+    }
+    
+    .table-row-disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      background-color: var(--table-stripe) !important;
+    }
+    
+    .table-row-disabled:hover {
+      background-color: var(--table-stripe) !important;
+    }
+    
+    /* Remove checkbox styling since we're not using them anymore */
+    .select-all-header {
+      display: none;
     }
     
     /* Layout styling */
@@ -265,7 +294,7 @@
       margin-bottom: 10px;
       border-radius: 6px;
       overflow: hidden;
-      border: 2px solid #26a69a;
+      border: 2px solid #26c6da;
       background: var(--bg-color);
       font-size: 0.85rem;
     }
@@ -291,7 +320,7 @@
     }
     
     .target-type-toggle button.active {
-      background: #26a69a;
+      background: #26c6da;
       color: white;
     }
     
@@ -336,11 +365,9 @@
         <div class="button-row">
           <a id="searchGroup" class="waves-effect waves-light btn cyan lighten-1">Search Groups</a>
           <a id="createGroup" class="waves-effect waves-light btn cyan lighten-1">Create Group</a>        </div>
-        <div id="groupResults"></div>
-
-        <!-- Configuration Table -->
+        <div id="groupResults"></div>        <!-- Configuration Table -->
         <div id="configTable">
-          <h6>Configuration Assignments</h6>
+          <h6>Configuration Assignments <span id="deviceNameDisplay" style="color: #26c6da; font-weight: normal; font-size: 0.9em;"></span></h6>
           <div class="input-field" style="margin-top: 10px; margin-bottom: 10px;">
             <input type="text" id="profileFilterInput" placeholder="Filter by name..." style="margin-bottom: 0;">
           </div>

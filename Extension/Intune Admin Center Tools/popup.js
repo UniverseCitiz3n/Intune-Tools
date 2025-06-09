@@ -3,7 +3,8 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     currentDisplayType: 'config',
     sortDirection: 'asc',
     theme: 'light',
-    targetMode: 'device' // New: track whether we're targeting devices or users
+    targetMode: 'device', // New: track whether we're targeting devices or users
+    selectedTableRows: new Set() // Track selected table rows
   };
 
   // ── Theme Management Functions ───────────────────────────────────────
@@ -202,8 +203,81 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     }
     
     throw new Error(`Invalid mode: ${mode}`);
+  };  // ── UI Update Functions ──────────────────────────────────────────────  
+  // updateDeviceNameDisplay: Update the device name display next to "Configuration Assignments"
+  const updateDeviceNameDisplay = (deviceData) => {
+    const deviceNameElement = document.getElementById('deviceNameDisplay');
+    if (deviceNameElement && deviceData && deviceData.deviceName) {
+      deviceNameElement.textContent = `- ${deviceData.deviceName}`;
+      logMessage(`updateDeviceNameDisplay: Updated device name display to "${deviceData.deviceName}"`);
+    }
   };
-  // ── UI Update Functions ──────────────────────────────────────────────
+
+  // Table row selection helpers
+  const clearTableSelection = () => {
+    state.selectedTableRows.clear();
+    document.querySelectorAll('.table-row-selected').forEach(row => {
+      row.classList.remove('table-row-selected');
+    });
+  };const getSelectedGroupNames = () => {
+    const selectedGroups = [];
+    document.querySelectorAll('.table-row-selected').forEach(row => {
+      let groupNameCell;
+      
+      // Determine which column contains the group name based on current table type
+      if (state.currentDisplayType === 'pwsh') {
+        groupNameCell = row.children[2]; // Assignment Target is the 3rd column (index 2) for PowerShell scripts
+      } else {
+        groupNameCell = row.children[1]; // Group Name is the 2nd column (index 1) for other tables after removing checkbox column
+      }
+      
+      const groupName = groupNameCell.textContent.trim();
+      
+      // Only include actual group names, not virtual assignments
+      if (groupName && groupName !== 'All Devices' && groupName !== 'All Users') {
+        selectedGroups.push(groupName);
+      }
+    });
+    return [...new Set(selectedGroups)]; // Remove duplicates
+  };
+
+  const getAllSelectedGroups = () => {
+    // Get groups from search results (existing functionality)
+    const searchResultGroups = [];
+    const searchCheckboxes = document.querySelectorAll("#groupResults input[type=checkbox]:checked");
+    searchCheckboxes.forEach(cb => {
+      searchResultGroups.push({
+        id: cb.value,
+        name: cb.dataset.groupName
+      });
+    });
+
+    // Get group names from selected table rows (new functionality)
+    const tableSelectedGroupNames = getSelectedGroupNames();
+    
+    return {
+      searchResults: searchResultGroups,
+      tableSelections: tableSelectedGroupNames,
+      hasAnySelection: searchResultGroups.length > 0 || tableSelectedGroupNames.length > 0
+    };
+  };
+  const handleTableRowClick = (row, rowIndex) => {
+    // Don't allow selection of disabled rows
+    if (row.classList.contains('table-row-disabled')) {
+      return;
+    }
+    
+    if (row.classList.contains('table-row-selected')) {
+      // Deselect the row
+      state.selectedTableRows.delete(rowIndex);
+      row.classList.remove('table-row-selected');
+    } else {
+      // Select the row
+      state.selectedTableRows.add(rowIndex);
+      row.classList.add('table-row-selected');
+    }
+  };
+
   // updateButtonText: Update button text based on current target mode
   const updateButtonText = () => {
     const targetType = state.targetMode === 'device' ? 'Device' : 'User';
@@ -230,9 +304,7 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     chrome.storage.local.set({ targetMode: state.targetMode });
     
     logMessage(`handleTargetModeToggle: Switched to ${mode} mode`);
-  };
-
-  // updateTableHeaders: Update table header based on content type
+  };  // updateTableHeaders: Update table header based on content type
   const updateTableHeaders = (type) => {
     const headerRow = document.querySelector('thead tr');
     let headerContent = '';
@@ -261,8 +333,7 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       headerContent = `
         <th class="sortable" style="word-wrap: break-word; white-space: normal;">Script Name</th>
         <th style="word-wrap: break-word; white-space: normal;">Description</th>
-        <th style="word-wrap: break-word; white-space: normal;">Assignment Target</th>
-      `;
+        <th style="word-wrap: break-word; white-space: normal;">Assignment Target</th>      `;
     }
     headerRow.innerHTML = headerContent;
     const sortableHeader = document.querySelector('th.sortable');
@@ -283,17 +354,29 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     if (state.sortDirection === 'desc') assignments.reverse();
 
     let rows = '';
+    let rowIndex = 0;
     assignments.forEach(policy => {
       policy.targets.forEach(target => {
-        rows += `<tr>
+        const isDisabled = target.groupName === 'All Devices' || target.groupName === 'All Users';
+        const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
+        
+        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}">
           <td style="word-wrap: break-word; white-space: normal;">${policy.policyName}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.targetType}</td>
         </tr>`;
-      });
-    });
+        rowIndex++;
+      });    });
+    
     document.getElementById("configTableBody").innerHTML = rows;
+    clearTableSelection(); // Clear any previous selections
+    
+    // Add event listeners for row clicks
+    document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
+      row.addEventListener('click', (e) => handleTableRowClick(row, index));
+    });
+    
     const sortableHeader = document.querySelector('th.sortable');
     sortableHeader.classList.remove('desc');
     sortableHeader.classList.add('asc');
@@ -310,18 +393,29 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     if (state.sortDirection === 'desc') assignments.reverse();
 
     let rows = '';
+    let rowIndex = 0;
     assignments.forEach(app => {
-      const targets = app.targets.filter(t => t.membershipType !== 'Not Member');
-      targets.forEach(target => {
-        rows += `<tr>
+      const targets = app.targets.filter(t => t.membershipType !== 'Not Member');      targets.forEach(target => {
+        const isDisabled = target.groupName === 'All Devices' || target.groupName === 'All Users';
+        const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
+        
+        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}">
           <td style="word-wrap: break-word; white-space: normal;">${app.appName}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.targetType}</td>
         </tr>`;
+        rowIndex++;
       });
     });
+    
     document.getElementById("configTableBody").innerHTML = rows;
+    clearTableSelection(); // Clear any previous selections
+      // Add event listeners for row clicks
+    document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
+      row.addEventListener('click', (e) => handleTableRowClick(row, index));
+    });
+    
     const sortableHeader = document.querySelector('th.sortable');
     sortableHeader.classList.remove('desc');
     sortableHeader.classList.add('asc');
@@ -338,22 +432,34 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     if (state.sortDirection === 'desc') assignments.reverse();
 
     let rows = '';
+    let rowIndex = 0;
     assignments.forEach(policy => {
       policy.targets.forEach(target => {
-        rows += `<tr>
+        const isDisabled = target.groupName === 'All Devices' || target.groupName === 'All Users';
+        const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
+        
+        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}">
           <td style="word-wrap: break-word; white-space: normal;">${policy.policyName}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.targetType}</td>
         </tr>`;
+        rowIndex++;
       });
     });
+    
     document.getElementById("configTableBody").innerHTML = rows;
+    clearTableSelection(); // Clear any previous selections
+    
+    // Add event listeners for row clicks
+    document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
+      row.addEventListener('click', (e) => handleTableRowClick(row, index));
+    });
+    
     const sortableHeader = document.querySelector('th.sortable');
     sortableHeader.classList.remove('desc');
     sortableHeader.classList.add('asc');
   };
-
   // updatePwshTable: Update PowerShell scripts table
   const updatePwshTable = (assignments, updateDisplay = true) => {
     if (updateDisplay) {
@@ -365,14 +471,28 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     if (state.sortDirection === 'desc') assignments.reverse();
 
     let rows = '';
+    let rowIndex = 0;
     assignments.forEach(script => {
-      rows += `<tr>
+      // PowerShell scripts don't have "All Devices" or "All Users" virtual groups to disable
+      // but we can still make them selectable for consistency
+      const disabledClass = 'table-row-selectable';
+      
+      rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}">
         <td style="word-wrap: break-word; white-space: normal;">${script.scriptName}</td>
         <td style="word-wrap: break-word; white-space: normal;">${script.description || ''}</td>
         <td style="word-wrap: break-word; white-space: normal;">${script.targetName}</td>
       </tr>`;
+      rowIndex++;
     });
+    
     document.getElementById("configTableBody").innerHTML = rows;
+    clearTableSelection(); // Clear any previous selections
+    
+    // Add event listeners for row clicks
+    document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
+      row.addEventListener('click', (e) => handleTableRowClick(row, index));
+    });
+    
     const sortableHeader = document.querySelector('th.sortable');
     sortableHeader.classList.remove('desc');
     sortableHeader.classList.add('asc');
@@ -503,21 +623,21 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       logMessage(`searchGroup: Error - ${error.message}`);
       showNotification('Error: ' + error.message, 'error');
     }
-  };
-  // Handle Adding Device/User to Selected Groups
+  };  // Handle Adding Device/User to Selected Groups
   const handleAddToGroups = async () => {
     const targetType = state.targetMode === 'device' ? 'device' : 'user';
     logMessage(`addToGroups clicked (${targetType} mode)`);
     
-    const checkboxes = document.querySelectorAll("#groupResults input[type=checkbox]:checked");
-    if (checkboxes.length === 0) {
+    const allSelected = getAllSelectedGroups();
+    if (!allSelected.hasAnySelection) {
       logMessage("addToGroups: No groups selected");
-      alert("Select at least one group.");
+      alert("Select at least one group from search results or table rows.");
       return;
     }
     
-    const groupIds = Array.from(checkboxes).map(cb => cb.value);
-    showNotification(`Adding ${targetType} to ${groupIds.length} group(s)...`, 'info');
+    // Show notification with count
+    const totalCount = allSelected.searchResults.length + allSelected.tableSelections.length;
+    showNotification(`Adding ${targetType} to ${totalCount} group(s)...`, 'info');
     
     try {
       const { mdmDeviceId } = await verifyMdmUrl();
@@ -527,23 +647,31 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       const { directoryId, displayName } = await getDirectoryObjectId(mdmDeviceId, token, state.targetMode);
       logMessage(`addToGroups: Got directory ID for ${targetType}: ${directoryId}`);
       
-      const promises = groupIds.map(async groupId => {
-        const postUrl = `https://graph.microsoft.com/beta/groups/${groupId}/members/$ref`;
-        const body = JSON.stringify({
-          "@odata.id": `https://graph.microsoft.com/beta/directoryObjects/${directoryId}`
-        });
-        logMessage(`addToGroups: Posting ${targetType} to group ${groupId}`);
-        try {
-          await fetchJSON(postUrl, {
-            method: "POST",
-            headers: { "Authorization": token, "Content-Type": "application/json" },
-            body: body
-          });
-          return { groupId, result: "Success" };
-        } catch (e) {
-          return { groupId, error: e.message };
-        }
+      const promises = [];
+      
+      // Process search result groups (existing logic with group IDs)
+      allSelected.searchResults.forEach(group => {
+        promises.push(addToSingleGroup(group.id, directoryId, token, group.name));
       });
+      
+      // Process table selection groups (need to resolve names to IDs)
+      for (const groupName of allSelected.tableSelections) {
+        try {
+          const groupData = await fetchJSON(`https://graph.microsoft.com/v1.0/groups?$filter=displayName eq '${encodeURIComponent(groupName)}'&$select=id,displayName`, {
+            method: "GET",
+            headers: { "Authorization": token, "Content-Type": "application/json" }
+          });
+          
+          if (groupData.value && groupData.value.length > 0) {
+            const groupId = groupData.value[0].id;
+            promises.push(addToSingleGroup(groupId, directoryId, token, groupName));
+          } else {
+            promises.push(Promise.resolve({ groupName, error: "Group not found" }));
+          }
+        } catch (e) {
+          promises.push(Promise.resolve({ groupName, error: e.message }));
+        }
+      }
       
       const results = await Promise.all(promises);
       let success = true;
@@ -551,9 +679,11 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       results.forEach(r => {
         if (r.error) {
           success = false;
-          message += `Group ${r.groupId}: Error - ${r.error}\n`;
+          const identifier = r.groupId || r.groupName || 'Unknown Group';
+          message += `Group ${identifier}: Error - ${r.error}\n`;
         } else {
-          message += `Group ${r.groupId}: Success\n`;
+          const identifier = r.groupId || r.groupName || 'Unknown Group';
+          message += `Group ${identifier}: Success\n`;
         }
       });
       
@@ -565,20 +695,39 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       showNotification(`Failed to add ${targetType} to groups: ${error.message}`, 'error');
     }
   };
-  // Handle Removing Device/User from Selected Groups
+
+  // Helper function to add to a single group
+  const addToSingleGroup = async (groupId, directoryId, token, groupName = null) => {
+    const postUrl = `https://graph.microsoft.com/beta/groups/${groupId}/members/$ref`;
+    const body = JSON.stringify({
+      "@odata.id": `https://graph.microsoft.com/beta/directoryObjects/${directoryId}`
+    });
+    
+    try {
+      await fetchJSON(postUrl, {
+        method: "POST",
+        headers: { "Authorization": token, "Content-Type": "application/json" },
+        body: body
+      });
+      return { groupId, groupName, result: "Success" };
+    } catch (e) {
+      return { groupId, groupName, error: e.message };
+    }
+  };  // Handle Removing Device/User from Selected Groups
   const handleRemoveFromGroups = async () => {
     const targetType = state.targetMode === 'device' ? 'device' : 'user';
     logMessage(`removeFromGroups clicked (${targetType} mode)`);
     
-    const checkboxes = document.querySelectorAll("#groupResults input[type=checkbox]:checked");
-    if (checkboxes.length === 0) {
+    const allSelected = getAllSelectedGroups();
+    if (!allSelected.hasAnySelection) {
       logMessage("removeFromGroups: No groups selected");
-      alert("Select at least one group.");
+      alert("Select at least one group from search results or table rows.");
       return;
     }
     
-    const groupIds = Array.from(checkboxes).map(cb => cb.value);
-    showNotification(`Removing ${targetType} from ${groupIds.length} group(s)...`, 'info');
+    // Show notification with count
+    const totalCount = allSelected.searchResults.length + allSelected.tableSelections.length;
+    showNotification(`Removing ${targetType} from ${totalCount} group(s)...`, 'info');
     
     try {
       const { mdmDeviceId } = await verifyMdmUrl();
@@ -588,21 +737,31 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       const { directoryId, displayName } = await getDirectoryObjectId(mdmDeviceId, token, state.targetMode);
       logMessage(`removeFromGroups: Got directory ID for ${targetType}: ${directoryId}`);
       
-      const promises = groupIds.map(async groupId => {
-        const deleteUrl = `https://graph.microsoft.com/v1.0/groups/${groupId}/members/${directoryId}/$ref`;
-        logMessage(`removeFromGroups: Deleting ${targetType} from group ${groupId}`);
+      const promises = [];
+      
+      // Process search result groups (existing logic with group IDs)
+      allSelected.searchResults.forEach(group => {
+        promises.push(removeFromSingleGroup(group.id, directoryId, token, group.name));
+      });
+      
+      // Process table selection groups (need to resolve names to IDs)
+      for (const groupName of allSelected.tableSelections) {
         try {
-          const response = await fetch(deleteUrl, {
-            method: "DELETE",
+          const groupData = await fetchJSON(`https://graph.microsoft.com/v1.0/groups?$filter=displayName eq '${encodeURIComponent(groupName)}'&$select=id,displayName`, {
+            method: "GET",
             headers: { "Authorization": token, "Content-Type": "application/json" }
           });
-          if (response.ok) return { groupId, result: "Removed" };
-          const text = await response.text();
-          return { groupId, error: text || response.statusText };
+          
+          if (groupData.value && groupData.value.length > 0) {
+            const groupId = groupData.value[0].id;
+            promises.push(removeFromSingleGroup(groupId, directoryId, token, groupName));
+          } else {
+            promises.push(Promise.resolve({ groupName, error: "Group not found" }));
+          }
         } catch (e) {
-          return { groupId, error: e.message };
+          promises.push(Promise.resolve({ groupName, error: e.message }));
         }
-      });
+      }
       
       const results = await Promise.all(promises);
       let success = true;
@@ -610,9 +769,11 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       results.forEach(r => {
         if (r.error) {
           success = false;
-          message += `Group ${r.groupId}: Error - ${r.error}\n`;
+          const identifier = r.groupId || r.groupName || 'Unknown Group';
+          message += `Group ${identifier}: Error - ${r.error}\n`;
         } else {
-          message += `Group ${r.groupId}: Success\n`;
+          const identifier = r.groupId || r.groupName || 'Unknown Group';
+          message += `Group ${identifier}: Success\n`;
         }
       });
       
@@ -625,6 +786,22 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     }
   };
 
+  // Helper function to remove from a single group
+  const removeFromSingleGroup = async (groupId, directoryId, token, groupName = null) => {
+    const deleteUrl = `https://graph.microsoft.com/v1.0/groups/${groupId}/members/${directoryId}/$ref`;
+    
+    try {
+      const response = await fetch(deleteUrl, {
+        method: "DELETE",
+        headers: { "Authorization": token, "Content-Type": "application/json" }
+      });
+      if (response.ok) return { groupId, groupName, result: "Removed" };
+      const text = await response.text();
+      return { groupId, groupName, error: text || response.statusText };
+    } catch (e) {
+      return { groupId, groupName, error: e.message };
+    }
+  };
   // Handle Checking Configuration Assignments
   const handleCheckGroups = async () => {
     logMessage("checkGroups clicked");
@@ -638,6 +815,10 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
+      
+      // Update device name display
+      updateDeviceNameDisplay(deviceData);
+      
       const azureADDeviceId = deviceData.azureADDeviceId;
       const userPrincipalName = deviceData.userPrincipalName;
       if (!azureADDeviceId) throw new Error("Could not find Azure AD Device ID for this device.");
@@ -741,7 +922,6 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       showNotification('Failed to load configuration assignments: ' + error.message, 'error');
     }
   };
-
   // Handle Checking Compliance Policies
   const handleCheckCompliance = async () => {
     logMessage("checkCompliance clicked");
@@ -756,6 +936,10 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
+      
+      // Update device name display
+      updateDeviceNameDisplay(deviceData);
+      
       const azureADDeviceId = deviceData.azureADDeviceId;
       const userPrincipalName = deviceData.userPrincipalName;
       if (!azureADDeviceId) throw new Error("Could not find Azure AD Device ID for this device.");
@@ -930,7 +1114,6 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       }
     });
   };
-
   // Handle App Assignments
   const handleAppsAssignment = async () => {
     logMessage("appsAssignment clicked");
@@ -945,6 +1128,10 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
+      
+      // Update device name display
+      updateDeviceNameDisplay(deviceData);
+      
       const azureADDeviceId = deviceData.azureADDeviceId;
       const userPrincipalName = deviceData.userPrincipalName;
       if (!azureADDeviceId) throw new Error("Could not find Azure AD Device ID for this device.");
@@ -1075,7 +1262,6 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       showNotification('Failed to load app assignments: ' + error.message, 'error');
     }
   };
-
   // Handle PowerShell Profiles (scripts)
   const handlePwshProfiles = async () => {
     logMessage("pwshProfiles clicked");
@@ -1090,6 +1276,10 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
+      
+      // Update device name display
+      updateDeviceNameDisplay(deviceData);
+      
       const azureADDeviceId = deviceData.azureADDeviceId;
       const userPrincipalName = deviceData.userPrincipalName;
       if (!azureADDeviceId) throw new Error("Could not find Azure AD Device ID for this device.");
@@ -1251,12 +1441,14 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     try {
       const { mdmDeviceId } = await verifyMdmUrl();
       const token = await getToken();
-      
-      // Get device data to find the primary user
+        // Get device data to find the primary user
       const deviceData = await fetchJSON(`https://graph.microsoft.com/beta/deviceManagement/manageddevices('${mdmDeviceId}')`, {
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
+      
+      // Update device name display
+      updateDeviceNameDisplay(deviceData);
       
       const userPrincipalName = deviceData.userPrincipalName;
       if (!userPrincipalName || userPrincipalName === 'Unknown user') {
