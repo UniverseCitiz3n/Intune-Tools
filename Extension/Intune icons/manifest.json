@@ -1,0 +1,39 @@
+{
+  "name": "Intune Tools Extension",
+  "version": "1.0",
+  "manifest_version": 3,
+  "description": "Adds a script execution button to specific Intune device group membership pages",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://intune.microsoft.com/*",
+    "https://sandbox-3.reactblade.portal.azure.net/*",
+    "https://reactblade.portal.azure.net/*",
+    "https://afd-v2.hosting.portal.azure.net/*",
+    "https://graph.microsoft.com/*"
+  ],  "content_scripts": [
+    {
+      "matches": ["https://intune.microsoft.com/*"],
+      "js": ["debug.js", "enhanced-notifications.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    },
+    "default_title": "Intune Tools"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}
