@@ -1,0 +1,356 @@
+:root {
+  --bg-color: #ffffff;
+  --text-color: #333333;
+  --header-bg: #f7f7f7;
+  --border-color: #eeeeee;
+  --table-hover: #f5f5f5;
+  --table-stripe: rgba(242, 242, 242, 0.5);
+  --group-text: #000000;
+  --btn-text: #ffffff;
+  --btn-shadow: rgba(0, 0, 0, 0.24);
+}
+
+[data-theme="dark"] {
+  --bg-color: #121212;
+  --text-color: #e0e0e0;
+  --header-bg: #1e1e1e;
+  --border-color: #333333;
+  --table-hover: #333333;
+  --table-stripe: rgba(60, 60, 60, 0.5);
+  --group-text: #e0e0e0;
+  --btn-text: #e0e0e0;
+  --btn-shadow: rgba(255, 255, 255, 0.1);
+}
+
+body { 
+  width: 800px; 
+  height: 600px; 
+  padding: 10px;
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  transition: all 0.3s ease;
+}
+
+.container { width: 95%; }
+#output { overflow-x: auto; margin-top: 10px; }
+.section { padding: 10px 0; }
+
+/* Input field styling */
+input[type="text"] {
+  color: var(--text-color) !important;
+  border-bottom-color: var(--border-color) !important;
+}
+
+input[type="text"]::placeholder {
+  color: var(--text-color);
+  opacity: 0.6;
+}
+
+/* Theme switch styling - Horizontal slider */
+.theme-switch-wrapper {
+  display: flex;
+  align-items: center;
+  margin-right: 10px;
+}
+
+.theme-switch-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 10px;
+}
+
+.theme-button {
+  width: 40px;
+  height: 20px;
+  background-color: #ccc;
+  border: none;
+  border-radius: 20px;
+  position: relative;
+  cursor: pointer;
+  outline: none;
+  transition: background-color 0.4s;
+}
+
+.theme-button .theme-icon {
+  width: 16px;
+  height: 16px;
+  background-color: white;
+  border-radius: 50%;
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.4s;
+}
+
+[data-theme="dark"] .theme-button {
+  background-color: #2196F3;
+}
+
+[data-theme="dark"] .theme-button .theme-icon {
+  transform: translateX(20px);
+}
+
+/* Light and dark mode icons */
+.mode-icon {
+  margin: 0 5px;
+  font-size: 16px !important;
+}
+
+.light-icon {
+  color: #f39c12;
+}
+
+.dark-icon {
+  color: #2c3e50;
+}
+
+[data-theme="dark"] .dark-icon {
+  color: #b3b3ff;
+}
+
+/* Header styling */
+.header-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+
+.header { 
+  color: #3fe0fd; 
+  margin-bottom: 0;
+  padding: 10px;
+  background-color: var(--header-bg);
+  border-bottom: 1px solid var(--border-color);
+  border-radius: 4px;
+  flex: 1;
+}
+
+/* Group results styling - Fixed dark mode visibility */
+#groupResults { 
+  margin: 10px 0;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+#groupResults p { 
+  margin: 5px 0; 
+}
+
+#groupResults span {
+  color: var(--group-text) !important;
+}
+
+/* Button styling - Updated for dark mode */
+.btn { 
+  margin: 5px 0; 
+  width: 100%;
+  font-size: 0.85rem;
+  padding: 0 0.5rem;
+  white-space: normal;
+  height: 32px;
+  line-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-transform: none;
+  color: var(--btn-text) !important;
+  box-shadow: 0 2px 2px 0 var(--btn-shadow), 0 3px 1px -2px var(--btn-shadow), 0 1px 5px 0 var(--btn-shadow);
+}
+
+[data-theme="dark"] .btn {
+  opacity: 0.9;
+}
+
+[data-theme="dark"] .btn:hover {
+  opacity: 1;
+}
+
+/* Dark mode specific button styling */
+[data-theme="dark"] .btn.cyan.lighten-1 {
+  background-color: #00ACC1 !important; /* darken-1 color for cyan */
+}
+
+/* Checkbox styling */
+[type="checkbox"]+span:not(.lever) { 
+  padding-left: 25px;
+  height: auto;
+  line-height: 20px;
+}
+  /* Table styling */
+table.striped > tbody > tr:nth-child(odd) {
+  background-color: var(--table-stripe);
+}
+
+table {
+  color: var(--text-color);
+}
+
+.sortable:hover {
+  background-color: var(--table-hover);
+}
+  /* Table row selection styling */
+.table-row-selectable {
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+  user-select: none;
+}
+
+.table-row-selectable:hover {
+  background-color: var(--table-hover) !important;
+}
+
+.table-row-selected {
+  background-color: rgba(38, 166, 154, 0.3) !important;
+  border-left: 3px solid #26c6da;
+}
+
+.table-row-disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background-color: var(--table-stripe) !important;
+}
+
+.table-row-disabled:hover {
+  background-color: var(--table-stripe) !important;
+}
+
+/* Remove checkbox styling since we're not using them anymore */
+.select-all-header {
+  display: none;
+}
+
+/* Layout styling */
+.main-content {
+  display: flex;
+  gap: 20px;
+}
+.output-area {
+  flex: 3;
+}
+.controls-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 180px;
+}
+#configTable table {
+  width: 100%;
+  margin-top: 20px;
+}
+
+/* Notification styling */
+#notification-bar {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background-color: #4CAF50;
+  color: white;
+  text-align: center;
+  padding: 10px;
+  z-index: 1000;
+  font-weight: bold;
+}
+#notification-bar.error {
+  background-color: #f44336;
+}
+#notification-bar.info {
+  background-color: #2196F3;
+}
+  /* Sortable header styling */
+.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.sortable::after {
+  content: '↕';
+  margin-left: 5px;
+  opacity: 0.5;
+}
+.sortable.asc::after {
+  content: '↓';
+  opacity: 1;
+}
+.sortable.desc::after {
+  content: '↑';
+  opacity: 1;
+}
+  /* Target type toggle styling */
+.target-type-toggle {
+  display: flex;
+  margin-bottom: 10px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 2px solid #26c6da;
+  background: var(--bg-color);
+  font-size: 0.85rem;
+}
+
+.target-type-toggle button {
+  flex: 1;
+  padding: 6px 10px;
+  border: none;
+  background: var(--bg-color);
+  color: var(--text-color);
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 0.8rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.target-type-toggle button .material-icons {
+  font-size: 16px !important;
+  margin-right: 4px;
+}
+
+.target-type-toggle button.active {
+  background: #26c6da;
+  color: white;
+}
+
+.target-type-toggle button:hover:not(.active) {
+  background: rgba(38, 166, 154, 0.1);
+}
+
+[data-theme="dark"] .target-type-toggle button:hover:not(.active) {
+  background: rgba(38, 166, 154, 0.2);
+}
+
+/* Header icon styling */
+.header img {
+  vertical-align: middle;
+  margin-right: 8px;
+}
+
+/* Device name display styling */
+#deviceNameDisplay {
+  color: #26c6da;
+  font-weight: normal;
+  font-size: 0.9em;
+}
+
+/* Profile filter input container styling */
+.profile-filter-container {
+  margin-top: 10px;
+  margin-bottom: 10px;
+}
+
+/* Profile filter input styling */
+#profileFilterInput {
+  margin-bottom: 0;
+}
+
+/* Target type toggle icons styling */
+.target-type-toggle .material-icons {
+  vertical-align: middle;
+  margin-right: 4px;
+  font-size: 18px;
+}

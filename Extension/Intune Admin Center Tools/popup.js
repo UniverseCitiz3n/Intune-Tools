@@ -212,12 +212,25 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       logMessage(`updateDeviceNameDisplay: Updated device name display to "${deviceData.deviceName}"`);
     }
   };
-
   // Table row selection helpers
   const clearTableSelection = () => {
     state.selectedTableRows.clear();
     document.querySelectorAll('.table-row-selected').forEach(row => {
       row.classList.remove('table-row-selected');
+    });
+  };
+
+  // Clear checkbox selections
+  const clearCheckboxSelection = () => {
+    document.querySelectorAll("#groupResults input[type=checkbox]:checked").forEach(cb => {
+      cb.checked = false;
+    });
+    // Update stored search results to reflect unchecked state
+    chrome.storage.local.get(['lastSearchResults'], (data) => {
+      if (data.lastSearchResults) {
+        const updated = data.lastSearchResults.map(group => ({ ...group, checked: false }));
+        chrome.storage.local.set({ lastSearchResults: updated });
+      }
     });
   };const getSelectedGroupNames = () => {
     const selectedGroups = [];
@@ -260,12 +273,14 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       tableSelections: tableSelectedGroupNames,
       hasAnySelection: searchResultGroups.length > 0 || tableSelectedGroupNames.length > 0
     };
-  };
-  const handleTableRowClick = (row, rowIndex) => {
+  };  const handleTableRowClick = (row, rowIndex) => {
     // Don't allow selection of disabled rows
     if (row.classList.contains('table-row-disabled')) {
       return;
     }
+    
+    // Clear checkbox selections when selecting table rows
+    clearCheckboxSelection();
     
     if (row.classList.contains('table-row-selected')) {
       // Deselect the row
@@ -1531,9 +1546,11 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
   document.getElementById("appsAssignment").addEventListener("click", handleAppsAssignment);
   document.getElementById("pwshProfiles").addEventListener("click", handlePwshProfiles);
   document.getElementById("collectLogs").addEventListener("click", handleCollectLogs);
-  document.getElementById("createGroup").addEventListener("click", handleCreateGroup);
-  document.getElementById("groupResults").addEventListener("change", (event) => {
+  document.getElementById("createGroup").addEventListener("click", handleCreateGroup);  document.getElementById("groupResults").addEventListener("change", (event) => {
     if (event.target.type === "checkbox") {
+      // Clear table selections when selecting checkboxes
+      clearTableSelection();
+      
       chrome.storage.local.get(['lastSearchResults'], (data) => {
         if (data.lastSearchResults) {
           const updated = data.lastSearchResults.map(group =>
