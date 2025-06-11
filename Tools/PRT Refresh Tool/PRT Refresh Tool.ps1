@@ -80,7 +80,7 @@ pause
 
     Write-Host "Created Start Menu shortcut at: $shortcutPath" -ForegroundColor Green   
 
-    Exit-WithCode -exitcode $SuccessCode
+    Exit 0
 } Catch {
     $Err = [PSCustomObject]@{
         Exception = $_.Exception.Message
