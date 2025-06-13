@@ -207,8 +207,8 @@ table {
 }
 
 .table-row-disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+  opacity: 0.6 !important;
+  cursor: not-allowed !important;
   background-color: var(--table-stripe) !important;
 }
 
@@ -353,4 +353,38 @@ table {
   vertical-align: middle;
   margin-right: 4px;
   font-size: 18px;
+}
+
+/* Dynamic group styling */
+.table-row-disabled {
+  opacity: 0.6 !important;
+  cursor: not-allowed !important;
+  background-color: var(--table-stripe) !important;
+}
+
+.table-row-disabled:hover {
+  background-color: var(--table-stripe) !important;
+}
+
+/* Dynamic group checkbox disabled styling */
+input[type="checkbox"]:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+input[type="checkbox"]:disabled + span {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* Dynamic group indicators */
+.dynamic-group-indicator {
+  color: #9e9e9e;
+  font-size: 14px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+[data-theme="dark"] .dynamic-group-indicator {
+  color: #757575;
 }

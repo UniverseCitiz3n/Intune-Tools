@@ -1,10 +1,12 @@
-document.addEventListener("DOMContentLoaded", () => {  // Global state variables
+document.addEventListener("DOMContentLoaded", () => {
+  // Global state variables
   const state = {
     currentDisplayType: 'config',
     sortDirection: 'asc',
     theme: 'light',
     targetMode: 'device', // New: track whether we're targeting devices or users
-    selectedTableRows: new Set() // Track selected table rows
+    selectedTableRows: new Set(), // Track selected table rows
+    dynamicGroups: new Set() // Track dynamic groups that cannot be modified manually
   };
 
   // ── Theme Management Functions ───────────────────────────────────────
@@ -27,6 +29,46 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
         logMessage(`Theme initialized to ${state.theme} mode`);
       }
     });
+  };
+
+  // ── Group Type Management Functions ───────────────────────────────────
+  const isDynamicGroup = (groupId) => {
+    return state.dynamicGroups.has(groupId);
+  };
+
+  const addDynamicGroup = (groupId) => {
+    state.dynamicGroups.add(groupId);
+  };
+  const clearDynamicGroups = () => {
+    state.dynamicGroups.clear();
+  };
+
+  // fetchGroupWithType: Fetch group details including groupTypes
+  const fetchGroupWithType = async (groupId, token) => {
+    try {
+      const groupData = await fetchJSON(`https://graph.microsoft.com/v1.0/groups/${groupId}?$select=id,displayName,groupTypes`, {
+        method: "GET",
+        headers: {
+          "Authorization": token,
+          "Content-Type": "application/json"
+        }
+      });
+      
+      // Check if group is dynamic
+      const isDynamic = groupData.groupTypes && groupData.groupTypes.includes('DynamicMembership');
+      if (isDynamic) {
+        addDynamicGroup(groupData.id);
+      }
+      
+      return {
+        id: groupData.id,
+        displayName: groupData.displayName,
+        isDynamic: isDynamic
+      };
+    } catch (error) {
+      logMessage(`Error fetching group details for ${groupId}: ${error.message}`);
+      return null;
+    }
   };
 
   // ── Utility Functions ───────────────────────────────────────────────
@@ -121,35 +163,47 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
         }
       });
     });
-  };
-  // getAllGroupsMap: Get groups map (device & user) for lookups
+  };  // getAllGroupsMap: Get groups map (device & user) for lookups, with dynamic group tracking
   const getAllGroupsMap = async (deviceObjectId, userObjectId, token) => {
     const headers = {
       "Authorization": token,
       "Content-Type": "application/json",
       "ConsistencyLevel": "eventual"
     };
+    
+    // Endpoints to get group memberships with groupTypes
     const endpoints = [
-      `https://graph.microsoft.com/beta/devices/${deviceObjectId}/memberOf?$orderBy=displayName%20asc&$count=true`,
-      `https://graph.microsoft.com/beta/devices/${deviceObjectId}/transitiveMemberOf?$orderBy=displayName%20asc&$count=true`
+      `https://graph.microsoft.com/beta/devices/${deviceObjectId}/memberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`,
+      `https://graph.microsoft.com/beta/devices/${deviceObjectId}/transitiveMemberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`
     ];
+    
     if (userObjectId) {
       endpoints.push(
-        `https://graph.microsoft.com/beta/users/${userObjectId}/memberOf?$orderBy=displayName%20asc&$count=true`,
-        `https://graph.microsoft.com/beta/users/${userObjectId}/transitiveMemberOf?$orderBy=displayName%20asc&$count=true`
+        `https://graph.microsoft.com/beta/users/${userObjectId}/memberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`,
+        `https://graph.microsoft.com/beta/users/${userObjectId}/transitiveMemberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`
       );
     }
+    
     const results = await Promise.all(
       endpoints.map(url => fetchJSON(url, { method: "GET", headers }))
     );
+    
     const groupMap = new Map();
+    
     results.forEach(result => {
       (result.value || []).forEach(group => {
         if (group['@odata.type'] === '#microsoft.graph.group') {
           groupMap.set(group.id, group.displayName);
+          
+          // Track dynamic groups
+          const isDynamic = group.groupTypes && group.groupTypes.includes('DynamicMembership');
+          if (isDynamic) {
+            addDynamicGroup(group.id);
+          }
         }
       });
     });
+    
     return groupMap;
   };
 
@@ -253,19 +307,22 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     });
     return [...new Set(selectedGroups)]; // Remove duplicates
   };
-
   const getAllSelectedGroups = () => {
-    // Get groups from search results (existing functionality)
+    // Get groups from search results (existing functionality) - filter out dynamic groups
     const searchResultGroups = [];
     const searchCheckboxes = document.querySelectorAll("#groupResults input[type=checkbox]:checked");
     searchCheckboxes.forEach(cb => {
-      searchResultGroups.push({
-        id: cb.value,
-        name: cb.dataset.groupName
-      });
+      // Only include non-dynamic groups
+      if (!isDynamicGroup(cb.value)) {
+        searchResultGroups.push({
+          id: cb.value,
+          name: cb.dataset.groupName
+        });
+      }
     });
 
     // Get group names from selected table rows (new functionality)
+    // Note: Dynamic groups are already filtered out by disabling row selection in table rendering
     const tableSelectedGroupNames = getSelectedGroupNames();
     
     return {
@@ -273,7 +330,7 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       tableSelections: tableSelectedGroupNames,
       hasAnySelection: searchResultGroups.length > 0 || tableSelectedGroupNames.length > 0
     };
-  };  const handleTableRowClick = (row, rowIndex) => {
+  };const handleTableRowClick = (row, rowIndex) => {
     // Don't allow selection of disabled rows
     if (row.classList.contains('table-row-disabled')) {
       return;
@@ -356,9 +413,7 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       sortableHeader.classList.remove('desc');
       sortableHeader.classList.add('asc');
     }
-  };
-
-  // updateConfigTable: Update configuration assignments table
+  };  // updateConfigTable: Update configuration assignments table
   const updateConfigTable = (assignments, updateDisplay = true) => {
     if (updateDisplay) {
       state.currentDisplayType = 'config';
@@ -372,17 +427,29 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     let rowIndex = 0;
     assignments.forEach(policy => {
       policy.targets.forEach(target => {
-        const isDisabled = target.groupName === 'All Devices' || target.groupName === 'All Users';
+        // Check if this is a virtual assignment or dynamic group
+        const isVirtualAssignment = target.groupName === 'All Devices' || target.groupName === 'All Users';
+        const isDynamicGroupAssignment = target.groupId && isDynamicGroup(target.groupId);
+        const isDisabled = isVirtualAssignment || isDynamicGroupAssignment;
         const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
         
-        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}">
+        // Add tooltip for disabled rows
+        let tooltipText = '';
+        if (isVirtualAssignment) {
+          tooltipText = ' title="Virtual group"';
+        } else if (isDynamicGroupAssignment) {
+          tooltipText = ' title="Dynamic group – cannot modify manually"';
+        }
+        
+        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}"${tooltipText}>
           <td style="word-wrap: break-word; white-space: normal;">${policy.policyName}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.targetType}</td>
         </tr>`;
         rowIndex++;
-      });    });
+      });
+    });
     
     document.getElementById("configTableBody").innerHTML = rows;
     clearTableSelection(); // Clear any previous selections
@@ -396,7 +463,6 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     sortableHeader.classList.remove('desc');
     sortableHeader.classList.add('asc');
   };
-
   // updateAppTable: Update app assignments table (similar in structure)
   const updateAppTable = (assignments, updateDisplay = true) => {
     if (updateDisplay) {
@@ -411,10 +477,21 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     let rowIndex = 0;
     assignments.forEach(app => {
       const targets = app.targets.filter(t => t.membershipType !== 'Not Member');      targets.forEach(target => {
-        const isDisabled = target.groupName === 'All Devices' || target.groupName === 'All Users';
+        // Check if this is a virtual assignment or dynamic group
+        const isVirtualAssignment = target.groupName === 'All Devices' || target.groupName === 'All Users';
+        const isDynamicGroupAssignment = target.groupId && isDynamicGroup(target.groupId);
+        const isDisabled = isVirtualAssignment || isDynamicGroupAssignment;
         const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
         
-        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}">
+        // Add tooltip for disabled rows
+        let tooltipText = '';
+        if (isVirtualAssignment) {
+          tooltipText = ' title="Virtual group"';
+        } else if (isDynamicGroupAssignment) {
+          tooltipText = ' title="Dynamic group – cannot modify manually"';
+        }
+        
+        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}"${tooltipText}>
           <td style="word-wrap: break-word; white-space: normal;">${app.appName}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
@@ -426,7 +503,8 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     
     document.getElementById("configTableBody").innerHTML = rows;
     clearTableSelection(); // Clear any previous selections
-      // Add event listeners for row clicks
+    
+    // Add event listeners for row clicks
     document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
       row.addEventListener('click', (e) => handleTableRowClick(row, index));
     });
@@ -435,7 +513,6 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     sortableHeader.classList.remove('desc');
     sortableHeader.classList.add('asc');
   };
-
   // updateComplianceTable: Update compliance assignments table
   const updateComplianceTable = (assignments, updateDisplay = true) => {
     if (updateDisplay) {
@@ -448,12 +525,22 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
 
     let rows = '';
     let rowIndex = 0;
-    assignments.forEach(policy => {
-      policy.targets.forEach(target => {
-        const isDisabled = target.groupName === 'All Devices' || target.groupName === 'All Users';
+    assignments.forEach(policy => {      policy.targets.forEach(target => {
+        // Check if this is a virtual assignment or dynamic group
+        const isVirtualAssignment = target.groupName === 'All Devices' || target.groupName === 'All Users';
+        const isDynamicGroupAssignment = target.groupId && isDynamicGroup(target.groupId);
+        const isDisabled = isVirtualAssignment || isDynamicGroupAssignment;
         const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
         
-        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}">
+        // Add tooltip for disabled rows
+        let tooltipText = '';
+        if (isVirtualAssignment) {
+          tooltipText = ' title="Virtual group"';
+        } else if (isDynamicGroupAssignment) {
+          tooltipText = ' title="Dynamic group – cannot modify manually"';
+        }
+        
+        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}"${tooltipText}>
           <td style="word-wrap: break-word; white-space: normal;">${policy.policyName}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
           <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
@@ -551,7 +638,6 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       }
     );
   };
-
   const restoreState = () => {
     chrome.storage.local.get(['lastSearchResults', 'lastSearchQuery'], (data) => {
       if (data.lastSearchQuery) {
@@ -560,28 +646,52 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
       if (data.lastSearchResults) {
         const resultsDiv = document.getElementById("groupResults");
         resultsDiv.innerHTML = "";
+        
+        // Clear and rebuild dynamic groups tracking from stored results
+        clearDynamicGroups();
+        
         data.lastSearchResults.forEach(group => {
+          // Restore dynamic group tracking
+          if (group.isDynamic) {
+            addDynamicGroup(group.id);
+          }
+          
           const item = document.createElement("p");
           const label = document.createElement("label");
           const checkbox = document.createElement("input");
+          
           checkbox.type = "checkbox";
           checkbox.value = group.id;
           checkbox.id = "group-" + group.id;
           checkbox.className = "filled-in";
           checkbox.dataset.groupName = group.displayName;
           if (group.checked) checkbox.checked = true;
-          const span = document.createElement("span");
-          span.textContent = group.displayName;
+          
+          // Disable checkbox for dynamic groups
+          if (group.isDynamic) {
+            checkbox.disabled = true;
+            checkbox.title = "Dynamic group – cannot modify manually";
+          }
+              const span = document.createElement("span");
+        span.textContent = group.displayName;
+        
+        // Apply visual styling for dynamic groups
+        if (group.isDynamic) {
+          span.style.color = "#9e9e9e"; // Muted gray color
+          span.style.fontStyle = "italic";
+          span.title = "Dynamic group – cannot modify manually";
+        } else {
           span.style.color = "black";
-          label.appendChild(checkbox);
-          label.appendChild(span);
-          item.appendChild(label);
-          resultsDiv.appendChild(item);
+        }
+        
+        label.appendChild(checkbox);
+        label.appendChild(span);
+        item.appendChild(label);
+        resultsDiv.appendChild(item);
         });
       }
     });
   };
-
   // ── Event Handler Functions ─────────────────────────────────────────────
   // Handle Group Search
   const handleSearchGroup = async () => {
@@ -595,7 +705,9 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     try {
       const token = await getToken();
       logMessage("searchGroup: Token found, proceeding with fetch");
-      const groupsData = await fetchJSON(`https://graph.microsoft.com/v1.0/groups?$search="displayName:${query}"&$top=10`, {
+      
+      // Fetch groups with groupTypes information
+      const groupsData = await fetchJSON(`https://graph.microsoft.com/v1.0/groups?$search="displayName:${query}"&$select=id,displayName,groupTypes&$top=10`, {
         method: "GET",
         headers: {
           "Authorization": token,
@@ -603,42 +715,74 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
           "ConsistencyLevel": "eventual"
         }
       });
+      
       logMessage("searchGroup: Received groups data");
       const resultsDiv = document.getElementById("groupResults");
       resultsDiv.innerHTML = "";
+      
       if (!groupsData.value || groupsData.value.length === 0) {
         logMessage("searchGroup: No groups found");
         resultsDiv.textContent = "No groups found.";
         return;
       }
-      const searchResults = groupsData.value.map(g => ({
-        id: g.id,
-        displayName: g.displayName,
-        checked: false
-      }));
+
+      // Clear previous dynamic groups tracking for search results
+      clearDynamicGroups();
+      
+      const searchResults = groupsData.value.map(g => {
+        const isDynamic = g.groupTypes && g.groupTypes.includes('DynamicMembership');
+        if (isDynamic) {
+          addDynamicGroup(g.id);
+        }
+        
+        return {
+          id: g.id,
+          displayName: g.displayName,
+          isDynamic: isDynamic,
+          checked: false
+        };
+      });
+      
       searchResults.forEach(group => {
         const item = document.createElement("p");
         const label = document.createElement("label");
         const checkbox = document.createElement("input");
+        
         checkbox.type = "checkbox";
         checkbox.value = group.id;
         checkbox.id = "group-" + group.id;
         checkbox.className = "filled-in";
         checkbox.dataset.groupName = group.displayName;
+        
+        // Disable checkbox for dynamic groups
+        if (group.isDynamic) {
+          checkbox.disabled = true;
+          checkbox.title = "Dynamic group – cannot modify manually";
+        }
+        
         const span = document.createElement("span");
-        span.textContent = group.displayName;
-        span.style.color = "black";
+        span.textContent = group.displayName;          // Apply visual styling for dynamic groups
+          if (group.isDynamic) {
+            span.style.color = "#9e9e9e"; // Muted gray color
+            span.style.fontStyle = "italic";
+            span.title = "Dynamic group – cannot modify manually";
+          } else {
+            span.style.color = "black";
+          }
+        
         label.appendChild(checkbox);
         label.appendChild(span);
-        item.appendChild(label);
-        resultsDiv.appendChild(item);
+        item.appendChild(label);        resultsDiv.appendChild(item);
       });
+      
       chrome.storage.local.set({ lastSearchResults: searchResults, lastSearchQuery: query });
     } catch (error) {
       logMessage(`searchGroup: Error - ${error.message}`);
       showNotification('Error: ' + error.message, 'error');
     }
-  };  // Handle Adding Device/User to Selected Groups
+  };
+
+  // Handle Adding Device/User to Selected Groups
   const handleAddToGroups = async () => {
     const targetType = state.targetMode === 'device' ? 'device' : 'user';
     logMessage(`addToGroups clicked (${targetType} mode)`);
@@ -816,13 +960,16 @@ document.addEventListener("DOMContentLoaded", () => {  // Global state variables
     } catch (e) {
       return { groupId, groupName, error: e.message };
     }
-  };
-  // Handle Checking Configuration Assignments
+  };  // Handle Checking Configuration Assignments
   const handleCheckGroups = async () => {
     logMessage("checkGroups clicked");
     showNotification('Fetching configuration assignments...', 'info');
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
+    
+    // Clear dynamic groups tracking before fetching new assignments
+    clearDynamicGroups();
+    
     try {
       const { mdmDeviceId } = await verifyMdmUrl();
       const token = await getToken();
