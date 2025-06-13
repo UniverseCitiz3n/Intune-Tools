@@ -149,21 +149,84 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   };
 
-  // getToken: Retrieve token from Chrome storage
-  const getToken = async () => {
+  // ── Token Handling Functions ─────────────────────────────────────
+
+  // decodeJwt: Decode base64url JWT payload
+  const decodeJwt = (token) => {
+    try {
+      const payload = token.split('.')[1];
+      const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
+      const json = atob(base64);
+      return JSON.parse(json);
+    } catch (e) {
+      return {};
+    }
+  };
+
+  // isTokenExpired: Returns true if token exp is past or within 60s
+  const isTokenExpired = (token) => {
+    try {
+      const { exp } = decodeJwt(token.replace(/^Bearer\s+/i, ''));
+      const now = Math.floor(Date.now() / 1000);
+      return !exp || exp <= now + 60;
+    } catch (e) {
+      return true;
+    }
+  };
+
+  // refreshToken: Open hidden Intune tab to force new Graph request
+  const refreshToken = async () => {
     return new Promise((resolve, reject) => {
-      chrome.storage.local.get("msGraphToken", (data) => {
-        if (data.msGraphToken) {
-          resolve(data.msGraphToken);
-        } else {
-          const error = 'No token captured. Please login first.';
-          logMessage(error);
-          showNotification(error, 'error');
-          reject(new Error(error));
+      chrome.tabs.create({ url: 'https://intune.microsoft.com', active: false }, (tab) => {
+        if (!tab) {
+          return reject(new Error('Unable to create refresh tab'));
         }
+
+        const timeout = setTimeout(() => {
+          chrome.storage.onChanged.removeListener(onChange);
+          chrome.tabs.remove(tab.id);
+          reject(new Error('Token refresh timed out'));
+        }, 15000);
+
+        const onChange = (changes, area) => {
+          if (area === 'local' && changes.msGraphToken) {
+            clearTimeout(timeout);
+            chrome.storage.onChanged.removeListener(onChange);
+            chrome.tabs.remove(tab.id);
+            resolve(changes.msGraphToken.newValue);
+          }
+        };
+
+        chrome.storage.onChanged.addListener(onChange);
       });
     });
-  };  // getAllGroupsMap: Get groups map (device & user) for lookups, with dynamic group tracking
+  };
+
+  // getToken: Retrieve token from Chrome storage and refresh if expired
+  const getToken = async () => {
+    const token = await new Promise((resolve) => {
+      chrome.storage.local.get('msGraphToken', (data) => {
+        resolve(data.msGraphToken || null);
+      });
+    });
+
+    if (!token || isTokenExpired(token)) {
+      logMessage('Token missing or expired, attempting refresh');
+      try {
+        const newToken = await refreshToken();
+        chrome.storage.local.set({ msGraphToken: newToken });
+        return newToken;
+      } catch (err) {
+        const error = 'Token refresh failed. Please login again.';
+        logMessage(error);
+        showNotification(error, 'error');
+        throw err;
+      }
+    }
+    return token;
+  };
+
+  // getAllGroupsMap: Get groups map (device & user) for lookups, with dynamic group tracking
   const getAllGroupsMap = async (deviceObjectId, userObjectId, token) => {
     const headers = {
       "Authorization": token,
@@ -1733,6 +1796,20 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   // Theme toggle button
   document.getElementById("theme-toggle").addEventListener("click", toggleTheme);
+
+  // Manual token refresh button
+  document.getElementById("refresh-token-btn").addEventListener("click", async () => {
+    showNotification('Refreshing token...', 'info');
+    try {
+      const newToken = await refreshToken();
+      chrome.storage.local.set({ msGraphToken: newToken });
+      showNotification('Token refreshed', 'success');
+      logMessage('Manual token refresh successful');
+    } catch (err) {
+      showNotification('Token refresh failed', 'error');
+      logMessage(`Manual token refresh failed: ${err.message}`);
+    }
+  });
 
   // Target mode toggle buttons
   document.getElementById("deviceModeBtn").addEventListener("click", () => handleTargetModeToggle('device'));
