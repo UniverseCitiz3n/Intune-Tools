@@ -330,6 +330,29 @@ table {
   margin-right: 8px;
 }
 
+/* Icon button styling */
+.icon-button {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  margin-right: 6px;
+  border-radius: 50%;
+  transition: background-color 0.3s ease;
+}
+
+.icon-button .material-icons {
+  font-size: 18px;
+  color: var(--text-color);
+}
+
+.icon-button:hover {
+  background-color: var(--table-hover);
+}
+
 /* Device name display styling */
 #deviceNameDisplay {
   color: #26c6da;

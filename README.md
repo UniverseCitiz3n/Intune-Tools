@@ -95,6 +95,8 @@ Once you're viewing a device in Intune Admin Center, open the extension to:
   * See which scripts are applied
   * Download script contents (decoded)
 * Dark/Light Mode Toggle 💪
+* Automatically refreshes your Graph token when it expires
+* Manual token refresh button for on-demand renewal
 
 ### Browser Compatibility
 * Chrome – Fully supported
