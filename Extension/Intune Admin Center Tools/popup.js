@@ -6,7 +6,15 @@ document.addEventListener("DOMContentLoaded", () => {
     theme: 'light',
     targetMode: 'device', // New: track whether we're targeting devices or users
     selectedTableRows: new Set(), // Track selected table rows
-    dynamicGroups: new Set() // Track dynamic groups that cannot be modified manually
+    dynamicGroups: new Set(), // Track dynamic groups that cannot be modified manually
+    pagination: {
+      currentPage: 1,
+      itemsPerPage: 10,
+      totalItems: 0,
+      totalPages: 0,
+      filteredData: [],
+      selectedRowIds: new Set() // Track selected rows across pages by unique identifier
+    }
   };
 
   // ── Theme Management Functions ───────────────────────────────────────
@@ -53,13 +61,13 @@ document.addEventListener("DOMContentLoaded", () => {
           "Content-Type": "application/json"
         }
       });
-      
+
       // Check if group is dynamic
       const isDynamic = groupData.groupTypes && groupData.groupTypes.includes('DynamicMembership');
       if (isDynamic) {
         addDynamicGroup(groupData.id);
       }
-      
+
       return {
         id: groupData.id,
         displayName: groupData.displayName,
@@ -78,44 +86,408 @@ document.addEventListener("DOMContentLoaded", () => {
     if (state.currentDisplayType === 'config') {
       chrome.storage.local.get(['lastConfigAssignments'], (data) => {
         if (data.lastConfigAssignments) {
-          const filteredResults = [...data.lastConfigAssignments].filter(item => 
+          const filteredResults = [...data.lastConfigAssignments].filter(item =>
             item.policyName.toLowerCase().includes(filterText)
           );
-          
+
           updateConfigTable(filteredResults, false); // Pass false to avoid changing currentDisplayType
         }
       });
     } else if (state.currentDisplayType === 'apps') {
       chrome.storage.local.get(['lastAppAssignments'], (data) => {
         if (data.lastAppAssignments) {
-          const filteredResults = [...data.lastAppAssignments].filter(item => 
+          const filteredResults = [...data.lastAppAssignments].filter(item =>
             item.appName.toLowerCase().includes(filterText)
           );
-          
+
           updateAppTable(filteredResults, false); // Pass false to avoid changing currentDisplayType
         }
       });
     } else if (state.currentDisplayType === 'compliance') {
       chrome.storage.local.get(['lastComplianceAssignments'], (data) => {
         if (data.lastComplianceAssignments) {
-          const filteredResults = [...data.lastComplianceAssignments].filter(item => 
+          const filteredResults = [...data.lastComplianceAssignments].filter(item =>
             item.policyName.toLowerCase().includes(filterText)
           );
-          
+
           updateComplianceTable(filteredResults, false); // Pass false to avoid changing currentDisplayType
         }
       });
     } else if (state.currentDisplayType === 'pwsh') {
       chrome.storage.local.get(['lastPwshAssignments'], (data) => {
         if (data.lastPwshAssignments) {
-          const filteredResults = [...data.lastPwshAssignments].filter(item => 
+          const filteredResults = [...data.lastPwshAssignments].filter(item =>
             item.scriptName.toLowerCase().includes(filterText)
           );
-          
+
           updatePwshTable(filteredResults, false); // Pass false to avoid changing currentDisplayType
         }
       });
     }
+  };
+
+  // ── Pagination Functions ────────────────────────────────────────────
+  // updatePaginationState: Update pagination state with filtered data
+  const updatePaginationState = (data, filterText = '') => {
+    const filteredData = filterText ? 
+      data.filter(item => {
+        const searchText = filterText.toLowerCase();
+        if (state.currentDisplayType === 'config') {
+          return item.policyName.toLowerCase().includes(searchText);
+        } else if (state.currentDisplayType === 'apps') {
+          return item.appName.toLowerCase().includes(searchText);
+        } else if (state.currentDisplayType === 'compliance') {
+          return item.policyName.toLowerCase().includes(searchText);
+        } else if (state.currentDisplayType === 'pwsh') {
+          return item.scriptName.toLowerCase().includes(searchText);
+        }
+        return true;
+      }) : data;
+
+    state.pagination.filteredData = filteredData;
+    state.pagination.totalItems = filteredData.length;
+    state.pagination.totalPages = Math.ceil(filteredData.length / state.pagination.itemsPerPage);
+    
+    // Reset to page 1 if current page is beyond available pages
+    if (state.pagination.currentPage > state.pagination.totalPages) {
+      state.pagination.currentPage = Math.max(1, state.pagination.totalPages);
+    }
+  };
+
+  // getCurrentPageData: Get data for current page
+  const getCurrentPageData = () => {
+    const startIndex = (state.pagination.currentPage - 1) * state.pagination.itemsPerPage;
+    const endIndex = startIndex + state.pagination.itemsPerPage;
+    return state.pagination.filteredData.slice(startIndex, endIndex);
+  };
+
+  // generatePageNumbers: Generate smart page number display
+  const generatePageNumbers = () => {
+    const { currentPage, totalPages } = state.pagination;
+    const pages = [];
+    
+    if (totalPages <= 7) {
+      // Show all pages if 7 or fewer
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      // Smart pagination with ellipsis
+      if (currentPage <= 4) {
+        // Near beginning: 1 2 3 4 5 ... last
+        for (let i = 1; i <= 5; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      } else if (currentPage >= totalPages - 3) {
+        // Near end: 1 ... last-4 last-3 last-2 last-1 last
+        pages.push(1);
+        pages.push('...');
+        for (let i = totalPages - 4; i <= totalPages; i++) {
+          pages.push(i);
+        }
+      } else {
+        // Middle: 1 ... current-1 current current+1 ... last
+        pages.push(1);
+        pages.push('...');
+        for (let i = currentPage - 1; i <= currentPage + 1; i++) {
+          pages.push(i);
+        }
+        pages.push('...');
+        pages.push(totalPages);
+      }
+    }
+    
+    return pages;
+  };
+
+  // updatePaginationControls: Update pagination UI elements
+  const updatePaginationControls = () => {
+    const container = document.getElementById('paginationContainer');
+    const resultsSpan = document.getElementById('paginationResults');
+    const pageNumbers = document.getElementById('pageNumbers');
+    const prevBtn = document.getElementById('prevPageBtn');
+    const nextBtn = document.getElementById('nextPageBtn');
+
+    if (state.pagination.totalItems === 0) {
+      container.style.display = 'none';
+      return;
+    }
+
+    container.style.display = 'flex';
+
+    // Update results info
+    const startItem = (state.pagination.currentPage - 1) * state.pagination.itemsPerPage + 1;
+    const endItem = Math.min(state.pagination.currentPage * state.pagination.itemsPerPage, state.pagination.totalItems);
+    resultsSpan.textContent = `Showing ${startItem}–${endItem} of ${state.pagination.totalItems} results`;
+
+    // Update page numbers
+    const pages = generatePageNumbers();
+    pageNumbers.innerHTML = '';
+    
+    pages.forEach(page => {
+      if (page === '...') {
+        const ellipsis = document.createElement('span');
+        ellipsis.className = 'page-ellipsis';
+        ellipsis.textContent = '...';
+        pageNumbers.appendChild(ellipsis);
+      } else {
+        const pageBtn = document.createElement('button');
+        pageBtn.className = 'page-number';
+        pageBtn.textContent = page;
+        if (page === state.pagination.currentPage) {
+          pageBtn.classList.add('active');
+        }
+        pageBtn.addEventListener('click', () => goToPage(page));
+        pageNumbers.appendChild(pageBtn);
+      }
+    });
+
+    // Update prev/next buttons
+    prevBtn.disabled = state.pagination.currentPage === 1;
+    nextBtn.disabled = state.pagination.currentPage === state.pagination.totalPages;
+  };
+
+  // clearTableAndPagination: Helper function to clear table and hide pagination
+  const clearTableAndPagination = () => {
+    document.getElementById("configTableBody").innerHTML = '';
+    document.getElementById('paginationContainer').style.display = 'none';
+    state.pagination.totalItems = 0;
+    state.pagination.totalPages = 0;
+    state.pagination.currentPage = 1;
+    state.pagination.filteredData = [];
+    state.pagination.selectedRowIds.clear(); // Clear selection when clearing table
+  };
+
+  // generateRowId: Generate unique ID for a table row based on content
+  const generateRowId = (rowData) => {
+    if (state.currentDisplayType === 'config') {
+      return `${rowData.policyName}-${rowData.targets[0].groupName}-${rowData.targets[0].targetType}`;
+    } else if (state.currentDisplayType === 'apps') {
+      return `${rowData.appName}-${rowData.targets[0].groupName}-${rowData.targets[0].targetType}`;
+    } else if (state.currentDisplayType === 'compliance') {
+      return `${rowData.policyName}-${rowData.targets[0].groupName}-${rowData.targets[0].targetType}`;
+    } else if (state.currentDisplayType === 'pwsh') {
+      return `${rowData.scriptName}-${rowData.targetName}`;
+    }
+    return '';
+  };
+
+  // restoreRowSelection: Restore row selection after rendering
+  const restoreRowSelection = () => {
+    document.querySelectorAll('#configTableBody tr').forEach((row) => {
+      const rowId = row.dataset.rowId;
+      if (rowId && state.pagination.selectedRowIds.has(rowId)) {
+        row.classList.add('table-row-selected');
+      }
+    });
+  };
+
+  // clearTableSelection: Clear all table row selections
+  const clearTableSelection = () => {
+    document.querySelectorAll('.table-row-selected').forEach(row => {
+      row.classList.remove('table-row-selected');
+    });
+    state.pagination.selectedRowIds.clear();
+  };
+
+  // goToPage: Navigate to specific page
+  const goToPage = (page) => {
+    if (page < 1 || page > state.pagination.totalPages) return;
+    
+    state.pagination.currentPage = page;
+    renderCurrentPage();
+    updatePaginationControls();
+  };
+
+  // renderCurrentPage: Render current page data in table
+  const renderCurrentPage = () => {
+    const currentPageData = getCurrentPageData();
+    
+    if (state.currentDisplayType === 'config') {
+      renderConfigTablePage(currentPageData);
+    } else if (state.currentDisplayType === 'apps') {
+      renderAppTablePage(currentPageData);
+    } else if (state.currentDisplayType === 'compliance') {
+      renderComplianceTablePage(currentPageData);
+    } else if (state.currentDisplayType === 'pwsh') {
+      renderPwshTablePage(currentPageData);
+    }
+  };
+
+  // Individual table rendering functions
+  const renderConfigTablePage = (assignments) => {
+    let rows = '';
+    let rowIndex = (state.pagination.currentPage - 1) * state.pagination.itemsPerPage;
+    
+    assignments.forEach(policy => {
+      policy.targets.forEach(target => {
+        // Generate unique row ID
+        const rowData = { policyName: policy.policyName, targets: [target] };
+        const rowId = generateRowId(rowData);
+        
+        // Check if this is a virtual assignment or dynamic group
+        const isVirtualAssignment = target.groupName === 'All Devices' || target.groupName === 'All Users';
+        const isDynamicGroupAssignment = target.groupId && isDynamicGroup(target.groupId);
+        const isDisabled = isVirtualAssignment || isDynamicGroupAssignment;
+        const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
+
+        // Add tooltip for disabled rows
+        let tooltipText = '';
+        if (isVirtualAssignment) {
+          tooltipText = ' title="Virtual group"';
+        } else if (isDynamicGroupAssignment) {
+          tooltipText = ' title="Dynamic group – cannot modify manually"';
+        }
+
+        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}" data-row-id="${rowId}"${tooltipText}>
+          <td style="word-wrap: break-word; white-space: normal;">${policy.policyName}</td>
+          <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
+          <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
+          <td style="word-wrap: break-word; white-space: normal;">${target.targetType}</td>
+        </tr>`;
+        rowIndex++;
+      });
+    });
+
+    document.getElementById("configTableBody").innerHTML = rows;
+
+    // Add event listeners for row clicks
+    document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
+      row.addEventListener('click', (e) => handleTableRowClick(row, index));
+    });
+
+    // Restore selection state
+    restoreRowSelection();
+  };
+
+  const renderAppTablePage = (assignments) => {
+    let rows = '';
+    let rowIndex = (state.pagination.currentPage - 1) * state.pagination.itemsPerPage;
+    
+    assignments.forEach(app => {
+      app.targets.forEach(target => {
+        // Generate unique row ID
+        const rowData = { appName: app.appName, targets: [target] };
+        const rowId = generateRowId(rowData);
+        
+        // Check if this is a virtual assignment or dynamic group
+        const isVirtualAssignment = target.groupName === 'All Devices' || target.groupName === 'All Users';
+        const isDynamicGroupAssignment = target.groupId && isDynamicGroup(target.groupId);
+        const isDisabled = isVirtualAssignment || isDynamicGroupAssignment;
+        const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
+
+        // Add tooltip for disabled rows
+        let tooltipText = '';
+        if (isVirtualAssignment) {
+          tooltipText = ' title="Virtual group"';
+        } else if (isDynamicGroupAssignment) {
+          tooltipText = ' title="Dynamic group – cannot modify manually"';
+        }
+
+        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}" data-row-id="${rowId}"${tooltipText}>
+          <td style="word-wrap: break-word; white-space: normal;">${app.appName}</td>
+          <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
+          <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
+          <td style="word-wrap: break-word; white-space: normal;">${target.targetType}</td>
+        </tr>`;
+        rowIndex++;
+      });
+    });
+
+    document.getElementById("configTableBody").innerHTML = rows;
+
+    // Add event listeners for row clicks
+    document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
+      row.addEventListener('click', (e) => handleTableRowClick(row, index));
+    });
+
+    // Restore selection state
+    restoreRowSelection();
+  };
+
+  const renderComplianceTablePage = (assignments) => {
+    let rows = '';
+    let rowIndex = (state.pagination.currentPage - 1) * state.pagination.itemsPerPage;
+    
+    assignments.forEach(policy => {
+      policy.targets.forEach(target => {
+        // Generate unique row ID
+        const rowData = { policyName: policy.policyName, targets: [target] };
+        const rowId = generateRowId(rowData);
+        
+        // Check if this is a virtual assignment or dynamic group
+        const isVirtualAssignment = target.groupName === 'All Devices' || target.groupName === 'All Users';
+        const isDynamicGroupAssignment = target.groupId && isDynamicGroup(target.groupId);
+        const isDisabled = isVirtualAssignment || isDynamicGroupAssignment;
+        const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
+
+        // Add tooltip for disabled rows
+        let tooltipText = '';
+        if (isVirtualAssignment) {
+          tooltipText = ' title="Virtual group"';
+        } else if (isDynamicGroupAssignment) {
+          tooltipText = ' title="Dynamic group – cannot modify manually"';
+        }
+
+        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}" data-row-id="${rowId}"${tooltipText}>
+          <td style="word-wrap: break-word; white-space: normal;">${policy.policyName}</td>
+          <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
+          <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
+          <td style="word-wrap: break-word; white-space: normal;">${target.targetType}</td>
+        </tr>`;
+        rowIndex++;
+      });
+    });
+
+    document.getElementById("configTableBody").innerHTML = rows;
+
+    // Add event listeners for row clicks
+    document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
+      row.addEventListener('click', (e) => handleTableRowClick(row, index));
+    });
+
+    // Restore selection state
+    restoreRowSelection();
+  };
+
+  const renderPwshTablePage = (assignments) => {
+    let rows = '';
+    let rowIndex = (state.pagination.currentPage - 1) * state.pagination.itemsPerPage;
+    
+    assignments.forEach(script => {
+      // Generate unique row ID
+      const rowData = { scriptName: script.scriptName, targetName: script.targetName };
+      const rowId = generateRowId(rowData);
+      
+      // Check if this is a virtual assignment that should be disabled
+      const isVirtualAssignment = script.targetName === 'All Devices' || script.targetName === 'All Users';
+      const disabledClass = isVirtualAssignment ? 'table-row-disabled' : 'table-row-selectable';
+
+      // Add tooltip for disabled rows
+      let tooltipText = '';
+      if (isVirtualAssignment) {
+        tooltipText = ' title="Virtual group"';
+      }
+
+      rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}" data-row-id="${rowId}"${tooltipText}>
+        <td style="word-wrap: break-word; white-space: normal;">${script.scriptName}</td>
+        <td style="word-wrap: break-word; white-space: normal;">${script.description || ''}</td>
+        <td style="word-wrap: break-word; white-space: normal;">${script.targetName}</td>
+      </tr>`;
+      rowIndex++;
+    });
+
+    document.getElementById("configTableBody").innerHTML = rows;
+
+    // Add event listeners for row clicks
+    document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
+      row.addEventListener('click', (e) => handleTableRowClick(row, index));
+    });
+
+    // Restore selection state
+    restoreRowSelection();
   };
 
   // fetchJSON: Helper to fetch and parse JSON responses
@@ -170,31 +542,31 @@ document.addEventListener("DOMContentLoaded", () => {
       "Content-Type": "application/json",
       "ConsistencyLevel": "eventual"
     };
-    
+
     // Endpoints to get group memberships with groupTypes
     const endpoints = [
       `https://graph.microsoft.com/beta/devices/${deviceObjectId}/memberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`,
       `https://graph.microsoft.com/beta/devices/${deviceObjectId}/transitiveMemberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`
     ];
-    
+
     if (userObjectId) {
       endpoints.push(
         `https://graph.microsoft.com/beta/users/${userObjectId}/memberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`,
         `https://graph.microsoft.com/beta/users/${userObjectId}/transitiveMemberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`
       );
     }
-    
+
     const results = await Promise.all(
       endpoints.map(url => fetchJSON(url, { method: "GET", headers }))
     );
-    
+
     const groupMap = new Map();
-    
+
     results.forEach(result => {
       (result.value || []).forEach(group => {
         if (group['@odata.type'] === '#microsoft.graph.group') {
           groupMap.set(group.id, group.displayName);
-          
+
           // Track dynamic groups
           const isDynamic = group.groupTypes && group.groupTypes.includes('DynamicMembership');
           if (isDynamic) {
@@ -203,14 +575,14 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       });
     });
-    
+
     return groupMap;
   };
 
   // getDirectoryObjectId: Get directory object ID for device or user based on current mode
   const getDirectoryObjectId = async (mdmDeviceId, token, mode = state.targetMode) => {
     logMessage(`getDirectoryObjectId: Getting ${mode} directory object ID`);
-    
+
     // First, get the managed device data
     const managedDeviceData = await fetchJSON(`https://graph.microsoft.com/beta/deviceManagement/manageddevices('${mdmDeviceId}')`, {
       method: "GET",
@@ -220,17 +592,17 @@ document.addEventListener("DOMContentLoaded", () => {
     if (mode === 'device') {
       const azureADDeviceId = managedDeviceData.azureADDeviceId;
       if (!azureADDeviceId) throw new Error("azureADDeviceId not found in managed device data.");
-      
+
       const filter = encodeURIComponent(`deviceId eq '${azureADDeviceId}'`);
       const deviceData = await fetchJSON(`https://graph.microsoft.com/v1.0/devices?$top=100&$filter=${filter}`, {
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
-      
+
       if (!deviceData.value || deviceData.value.length === 0) {
         throw new Error("No device found matching the azureADDeviceId.");
       }
-      
+
       return {
         directoryId: deviceData.value[0].id,
         displayName: deviceData.value[0].displayName || 'Unknown Device'
@@ -240,22 +612,22 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!userPrincipalName || userPrincipalName === 'Unknown user') {
         throw new Error("No user associated with this device.");
       }
-      
+
       const userData = await fetchJSON(`https://graph.microsoft.com/beta/users?$filter=userPrincipalName eq '${encodeURIComponent(userPrincipalName)}'`, {
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
-      
+
       if (!userData.value || userData.value.length === 0) {
         throw new Error("No user found matching the userPrincipalName.");
       }
-      
+
       return {
         directoryId: userData.value[0].id,
         displayName: userData.value[0].displayName || userPrincipalName
       };
     }
-    
+
     throw new Error(`Invalid mode: ${mode}`);
   };  // ── UI Update Functions ──────────────────────────────────────────────  
   // updateDeviceNameDisplay: Update the device name display next to "Configuration Assignments"
@@ -267,12 +639,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   };
   // Table row selection helpers
-  const clearTableSelection = () => {
-    state.selectedTableRows.clear();
-    document.querySelectorAll('.table-row-selected').forEach(row => {
-      row.classList.remove('table-row-selected');
-    });
-  };
+  // (clearTableSelection moved to pagination section)
 
   // Clear checkbox selections
   const clearCheckboxSelection = () => {
@@ -286,20 +653,20 @@ document.addEventListener("DOMContentLoaded", () => {
         chrome.storage.local.set({ lastSearchResults: updated });
       }
     });
-  };const getSelectedGroupNames = () => {
+  }; const getSelectedGroupNames = () => {
     const selectedGroups = [];
     document.querySelectorAll('.table-row-selected').forEach(row => {
       let groupNameCell;
-      
+
       // Determine which column contains the group name based on current table type
       if (state.currentDisplayType === 'pwsh') {
         groupNameCell = row.children[2]; // Assignment Target is the 3rd column (index 2) for PowerShell scripts
       } else {
         groupNameCell = row.children[1]; // Group Name is the 2nd column (index 1) for other tables after removing checkbox column
       }
-      
+
       const groupName = groupNameCell.textContent.trim();
-      
+
       // Only include actual group names, not virtual assignments
       if (groupName && groupName !== 'All Devices' && groupName !== 'All Users') {
         selectedGroups.push(groupName);
@@ -324,28 +691,31 @@ document.addEventListener("DOMContentLoaded", () => {
     // Get group names from selected table rows (new functionality)
     // Note: Dynamic groups are already filtered out by disabling row selection in table rendering
     const tableSelectedGroupNames = getSelectedGroupNames();
-    
+
     return {
       searchResults: searchResultGroups,
       tableSelections: tableSelectedGroupNames,
       hasAnySelection: searchResultGroups.length > 0 || tableSelectedGroupNames.length > 0
     };
-  };const handleTableRowClick = (row, rowIndex) => {
+  }; const handleTableRowClick = (row, rowIndex) => {
     // Don't allow selection of disabled rows
     if (row.classList.contains('table-row-disabled')) {
       return;
     }
-    
+
     // Clear checkbox selections when selecting table rows
     clearCheckboxSelection();
-    
+
+    const rowId = row.dataset.rowId;
+    if (!rowId) return; // Skip if no row ID
+
     if (row.classList.contains('table-row-selected')) {
       // Deselect the row
-      state.selectedTableRows.delete(rowIndex);
+      state.pagination.selectedRowIds.delete(rowId);
       row.classList.remove('table-row-selected');
     } else {
       // Select the row
-      state.selectedTableRows.add(rowIndex);
+      state.pagination.selectedRowIds.add(rowId);
       row.classList.add('table-row-selected');
     }
   };
@@ -361,20 +731,20 @@ document.addEventListener("DOMContentLoaded", () => {
   // handleTargetModeToggle: Handle switching between device and user modes
   const handleTargetModeToggle = (mode) => {
     if (state.targetMode === mode) return; // No change needed
-    
+
     state.targetMode = mode;
-    
+
     // Update UI
     document.querySelectorAll('.target-type-toggle button').forEach(btn => {
       btn.classList.remove('active');
     });
     document.querySelector(`[data-mode="${mode}"]`).classList.add('active');
-    
+
     updateButtonText();
-    
+
     // Save to storage
     chrome.storage.local.set({ targetMode: state.targetMode });
-    
+
     logMessage(`handleTargetModeToggle: Switched to ${mode} mode`);
   };  // updateTableHeaders: Update table header based on content type
   const updateTableHeaders = (type) => {
@@ -423,42 +793,25 @@ document.addEventListener("DOMContentLoaded", () => {
     assignments.sort((a, b) => a.policyName.localeCompare(b.policyName));
     if (state.sortDirection === 'desc') assignments.reverse();
 
-    let rows = '';
-    let rowIndex = 0;
+    // Flatten assignments for pagination (each target becomes a row)
+    const flattenedData = [];
     assignments.forEach(policy => {
       policy.targets.forEach(target => {
-        // Check if this is a virtual assignment or dynamic group
-        const isVirtualAssignment = target.groupName === 'All Devices' || target.groupName === 'All Users';
-        const isDynamicGroupAssignment = target.groupId && isDynamicGroup(target.groupId);
-        const isDisabled = isVirtualAssignment || isDynamicGroupAssignment;
-        const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
-        
-        // Add tooltip for disabled rows
-        let tooltipText = '';
-        if (isVirtualAssignment) {
-          tooltipText = ' title="Virtual group"';
-        } else if (isDynamicGroupAssignment) {
-          tooltipText = ' title="Dynamic group – cannot modify manually"';
-        }
-        
-        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}"${tooltipText}>
-          <td style="word-wrap: break-word; white-space: normal;">${policy.policyName}</td>
-          <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
-          <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
-          <td style="word-wrap: break-word; white-space: normal;">${target.targetType}</td>
-        </tr>`;
-        rowIndex++;
+        flattenedData.push({
+          policyName: policy.policyName,
+          targets: [target] // Keep single target for rendering
+        });
       });
     });
+
+    // Update pagination state
+    const filterValue = document.getElementById('profileFilterInput').value.toLowerCase();
+    updatePaginationState(flattenedData, filterValue);
     
-    document.getElementById("configTableBody").innerHTML = rows;
-    clearTableSelection(); // Clear any previous selections
-    
-    // Add event listeners for row clicks
-    document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
-      row.addEventListener('click', (e) => handleTableRowClick(row, index));
-    });
-    
+    // Render current page
+    renderCurrentPage();
+    updatePaginationControls();
+
     const sortableHeader = document.querySelector('th.sortable');
     sortableHeader.classList.remove('desc');
     sortableHeader.classList.add('asc');
@@ -473,42 +826,28 @@ document.addEventListener("DOMContentLoaded", () => {
     assignments.sort((a, b) => a.appName.localeCompare(b.appName));
     if (state.sortDirection === 'desc') assignments.reverse();
 
-    let rows = '';
-    let rowIndex = 0;
+    // Flatten assignments for pagination (each target becomes a row)
+    const flattenedData = [];
     assignments.forEach(app => {
-      const targets = app.targets.filter(t => t.membershipType !== 'Not Member');      targets.forEach(target => {
-        // Check if this is a virtual assignment or dynamic group
-        const isVirtualAssignment = target.groupName === 'All Devices' || target.groupName === 'All Users';
-        const isDynamicGroupAssignment = target.groupId && isDynamicGroup(target.groupId);
-        const isDisabled = isVirtualAssignment || isDynamicGroupAssignment;
-        const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
-        
-        // Add tooltip for disabled rows
-        let tooltipText = '';
-        if (isVirtualAssignment) {
-          tooltipText = ' title="Virtual group"';
-        } else if (isDynamicGroupAssignment) {
-          tooltipText = ' title="Dynamic group – cannot modify manually"';
-        }
-        
-        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}"${tooltipText}>
-          <td style="word-wrap: break-word; white-space: normal;">${app.appName}</td>
-          <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
-          <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
-          <td style="word-wrap: break-word; white-space: normal;">${target.targetType}</td>
-        </tr>`;
-        rowIndex++;
+      const targets = app.targets.filter(t => t.membershipType !== 'Not Member');
+      targets.forEach(target => {
+        flattenedData.push({
+          appName: app.appName,
+          appVersion: app.appVersion,
+          installState: app.installState,
+          targets: [target] // Keep single target for rendering
+        });
       });
     });
+
+    // Update pagination state
+    const filterValue = document.getElementById('profileFilterInput').value.toLowerCase();
+    updatePaginationState(flattenedData, filterValue);
     
-    document.getElementById("configTableBody").innerHTML = rows;
-    clearTableSelection(); // Clear any previous selections
-    
-    // Add event listeners for row clicks
-    document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
-      row.addEventListener('click', (e) => handleTableRowClick(row, index));
-    });
-    
+    // Render current page
+    renderCurrentPage();
+    updatePaginationControls();
+
     const sortableHeader = document.querySelector('th.sortable');
     sortableHeader.classList.remove('desc');
     sortableHeader.classList.add('asc');
@@ -523,41 +862,26 @@ document.addEventListener("DOMContentLoaded", () => {
     assignments.sort((a, b) => a.policyName.localeCompare(b.policyName));
     if (state.sortDirection === 'desc') assignments.reverse();
 
-    let rows = '';
-    let rowIndex = 0;
-    assignments.forEach(policy => {      policy.targets.forEach(target => {
-        // Check if this is a virtual assignment or dynamic group
-        const isVirtualAssignment = target.groupName === 'All Devices' || target.groupName === 'All Users';
-        const isDynamicGroupAssignment = target.groupId && isDynamicGroup(target.groupId);
-        const isDisabled = isVirtualAssignment || isDynamicGroupAssignment;
-        const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
-        
-        // Add tooltip for disabled rows
-        let tooltipText = '';
-        if (isVirtualAssignment) {
-          tooltipText = ' title="Virtual group"';
-        } else if (isDynamicGroupAssignment) {
-          tooltipText = ' title="Dynamic group – cannot modify manually"';
-        }
-        
-        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}"${tooltipText}>
-          <td style="word-wrap: break-word; white-space: normal;">${policy.policyName}</td>
-          <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
-          <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
-          <td style="word-wrap: break-word; white-space: normal;">${target.targetType}</td>
-        </tr>`;
-        rowIndex++;
+    // Flatten assignments for pagination (each target becomes a row)
+    const flattenedData = [];
+    assignments.forEach(policy => {
+      policy.targets.forEach(target => {
+        flattenedData.push({
+          policyName: policy.policyName,
+          complianceState: policy.complianceState,
+          targets: [target] // Keep single target for rendering
+        });
       });
     });
+
+    // Update pagination state
+    const filterValue = document.getElementById('profileFilterInput').value.toLowerCase();
+    updatePaginationState(flattenedData, filterValue);
     
-    document.getElementById("configTableBody").innerHTML = rows;
-    clearTableSelection(); // Clear any previous selections
-    
-    // Add event listeners for row clicks
-    document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
-      row.addEventListener('click', (e) => handleTableRowClick(row, index));
-    });
-    
+    // Render current page
+    renderCurrentPage();
+    updatePaginationControls();
+
     const sortableHeader = document.querySelector('th.sortable');
     sortableHeader.classList.remove('desc');
     sortableHeader.classList.add('asc');
@@ -572,29 +896,21 @@ document.addEventListener("DOMContentLoaded", () => {
     assignments.sort((a, b) => a.scriptName.localeCompare(b.scriptName));
     if (state.sortDirection === 'desc') assignments.reverse();
 
-    let rows = '';
-    let rowIndex = 0;
-    assignments.forEach(script => {
-      // PowerShell scripts don't have "All Devices" or "All Users" virtual groups to disable
-      // but we can still make them selectable for consistency
-      const disabledClass = 'table-row-selectable';
-      
-      rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}">
-        <td style="word-wrap: break-word; white-space: normal;">${script.scriptName}</td>
-        <td style="word-wrap: break-word; white-space: normal;">${script.description || ''}</td>
-        <td style="word-wrap: break-word; white-space: normal;">${script.targetName}</td>
-      </tr>`;
-      rowIndex++;
-    });
+    // For PowerShell scripts, each script is a single row (no targets to flatten)
+    const flattenedData = assignments.map(script => ({
+      scriptName: script.scriptName,
+      description: script.description || '',
+      targetName: script.targetName
+    }));
+
+    // Update pagination state
+    const filterValue = document.getElementById('profileFilterInput').value.toLowerCase();
+    updatePaginationState(flattenedData, filterValue);
     
-    document.getElementById("configTableBody").innerHTML = rows;
-    clearTableSelection(); // Clear any previous selections
-    
-    // Add event listeners for row clicks
-    document.querySelectorAll('#configTableBody tr').forEach((row, index) => {
-      row.addEventListener('click', (e) => handleTableRowClick(row, index));
-    });
-    
+    // Render current page
+    renderCurrentPage();
+    updatePaginationControls();
+
     const sortableHeader = document.querySelector('th.sortable');
     sortableHeader.classList.remove('desc');
     sortableHeader.classList.add('asc');
@@ -611,10 +927,10 @@ document.addEventListener("DOMContentLoaded", () => {
         } else {
           updateButtonText(); // Ensure buttons show correct text on first load
         }
-        
+
         if (data.currentDisplayType) {
           state.currentDisplayType = data.currentDisplayType;
-          document.getElementById("configTableBody").innerHTML = '';
+          clearTableAndPagination();
           if (state.currentDisplayType === 'compliance' && data.lastComplianceAssignments) {
             chrome.storage.local.remove(['lastConfigAssignments', 'lastAppAssignments', 'lastPwshAssignments']);
             updateComplianceTable(data.lastComplianceAssignments, false);
@@ -629,7 +945,7 @@ document.addEventListener("DOMContentLoaded", () => {
             updatePwshTable(data.lastPwshAssignments, false);
           }
         } else {
-          document.getElementById("configTableBody").innerHTML = '';
+          clearTableAndPagination();
         }
         if (data.profileFilterValue) {
           document.getElementById('profileFilterInput').value = data.profileFilterValue;
@@ -646,48 +962,48 @@ document.addEventListener("DOMContentLoaded", () => {
       if (data.lastSearchResults) {
         const resultsDiv = document.getElementById("groupResults");
         resultsDiv.innerHTML = "";
-        
+
         // Clear and rebuild dynamic groups tracking from stored results
         clearDynamicGroups();
-        
+
         data.lastSearchResults.forEach(group => {
           // Restore dynamic group tracking
           if (group.isDynamic) {
             addDynamicGroup(group.id);
           }
-          
+
           const item = document.createElement("p");
           const label = document.createElement("label");
           const checkbox = document.createElement("input");
-          
+
           checkbox.type = "checkbox";
           checkbox.value = group.id;
           checkbox.id = "group-" + group.id;
           checkbox.className = "filled-in";
           checkbox.dataset.groupName = group.displayName;
           if (group.checked) checkbox.checked = true;
-          
+
           // Disable checkbox for dynamic groups
           if (group.isDynamic) {
             checkbox.disabled = true;
             checkbox.title = "Dynamic group – cannot modify manually";
           }
-              const span = document.createElement("span");
-        span.textContent = group.displayName;
-        
-        // Apply visual styling for dynamic groups
-        if (group.isDynamic) {
-          span.style.color = "#9e9e9e"; // Muted gray color
-          span.style.fontStyle = "italic";
-          span.title = "Dynamic group – cannot modify manually";
-        } else {
-          span.style.color = "black";
-        }
-        
-        label.appendChild(checkbox);
-        label.appendChild(span);
-        item.appendChild(label);
-        resultsDiv.appendChild(item);
+          const span = document.createElement("span");
+          span.textContent = group.displayName;
+
+          // Apply visual styling for dynamic groups
+          if (group.isDynamic) {
+            span.style.color = "#9e9e9e"; // Muted gray color
+            span.style.fontStyle = "italic";
+            span.title = "Dynamic group – cannot modify manually";
+          } else {
+            span.style.color = "black";
+          }
+
+          label.appendChild(checkbox);
+          label.appendChild(span);
+          item.appendChild(label);
+          resultsDiv.appendChild(item);
         });
       }
     });
@@ -705,7 +1021,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const token = await getToken();
       logMessage("searchGroup: Token found, proceeding with fetch");
-      
+
       // Fetch groups with groupTypes information
       const groupsData = await fetchJSON(`https://graph.microsoft.com/v1.0/groups?$search="displayName:${query}"&$select=id,displayName,groupTypes&$top=10`, {
         method: "GET",
@@ -715,11 +1031,11 @@ document.addEventListener("DOMContentLoaded", () => {
           "ConsistencyLevel": "eventual"
         }
       });
-      
+
       logMessage("searchGroup: Received groups data");
       const resultsDiv = document.getElementById("groupResults");
       resultsDiv.innerHTML = "";
-      
+
       if (!groupsData.value || groupsData.value.length === 0) {
         logMessage("searchGroup: No groups found");
         resultsDiv.textContent = "No groups found.";
@@ -728,13 +1044,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Clear previous dynamic groups tracking for search results
       clearDynamicGroups();
-      
+
       const searchResults = groupsData.value.map(g => {
         const isDynamic = g.groupTypes && g.groupTypes.includes('DynamicMembership');
         if (isDynamic) {
           addDynamicGroup(g.id);
         }
-        
+
         return {
           id: g.id,
           displayName: g.displayName,
@@ -742,39 +1058,39 @@ document.addEventListener("DOMContentLoaded", () => {
           checked: false
         };
       });
-      
+
       searchResults.forEach(group => {
         const item = document.createElement("p");
         const label = document.createElement("label");
         const checkbox = document.createElement("input");
-        
+
         checkbox.type = "checkbox";
         checkbox.value = group.id;
         checkbox.id = "group-" + group.id;
         checkbox.className = "filled-in";
         checkbox.dataset.groupName = group.displayName;
-        
+
         // Disable checkbox for dynamic groups
         if (group.isDynamic) {
           checkbox.disabled = true;
           checkbox.title = "Dynamic group – cannot modify manually";
         }
-        
+
         const span = document.createElement("span");
         span.textContent = group.displayName;          // Apply visual styling for dynamic groups
-          if (group.isDynamic) {
-            span.style.color = "#9e9e9e"; // Muted gray color
-            span.style.fontStyle = "italic";
-            span.title = "Dynamic group – cannot modify manually";
-          } else {
-            span.style.color = "black";
-          }
-        
+        if (group.isDynamic) {
+          span.style.color = "#9e9e9e"; // Muted gray color
+          span.style.fontStyle = "italic";
+          span.title = "Dynamic group – cannot modify manually";
+        } else {
+          span.style.color = "black";
+        }
+
         label.appendChild(checkbox);
         label.appendChild(span);
-        item.appendChild(label);        resultsDiv.appendChild(item);
+        item.appendChild(label); resultsDiv.appendChild(item);
       });
-      
+
       chrome.storage.local.set({ lastSearchResults: searchResults, lastSearchQuery: query });
     } catch (error) {
       logMessage(`searchGroup: Error - ${error.message}`);
@@ -786,33 +1102,33 @@ document.addEventListener("DOMContentLoaded", () => {
   const handleAddToGroups = async () => {
     const targetType = state.targetMode === 'device' ? 'device' : 'user';
     logMessage(`addToGroups clicked (${targetType} mode)`);
-    
+
     const allSelected = getAllSelectedGroups();
     if (!allSelected.hasAnySelection) {
       logMessage("addToGroups: No groups selected");
       alert("Select at least one group from search results or table rows.");
       return;
     }
-    
+
     // Show notification with count
     const totalCount = allSelected.searchResults.length + allSelected.tableSelections.length;
     showNotification(`Adding ${targetType} to ${totalCount} group(s)...`, 'info');
-    
+
     try {
       const { mdmDeviceId } = await verifyMdmUrl();
       const token = await getToken();
       logMessage(`addToGroups: Extracted mdmDeviceId ${mdmDeviceId}`);
-      
+
       const { directoryId, displayName } = await getDirectoryObjectId(mdmDeviceId, token, state.targetMode);
       logMessage(`addToGroups: Got directory ID for ${targetType}: ${directoryId}`);
-      
+
       const promises = [];
-      
+
       // Process search result groups (existing logic with group IDs)
       allSelected.searchResults.forEach(group => {
         promises.push(addToSingleGroup(group.id, directoryId, token, group.name));
       });
-      
+
       // Process table selection groups (need to resolve names to IDs)
       for (const groupName of allSelected.tableSelections) {
         try {
@@ -820,7 +1136,7 @@ document.addEventListener("DOMContentLoaded", () => {
             method: "GET",
             headers: { "Authorization": token, "Content-Type": "application/json" }
           });
-          
+
           if (groupData.value && groupData.value.length > 0) {
             const groupId = groupData.value[0].id;
             promises.push(addToSingleGroup(groupId, directoryId, token, groupName));
@@ -831,7 +1147,7 @@ document.addEventListener("DOMContentLoaded", () => {
           promises.push(Promise.resolve({ groupName, error: e.message }));
         }
       }
-      
+
       const results = await Promise.all(promises);
       let success = true;
       let message = '';
@@ -845,7 +1161,7 @@ document.addEventListener("DOMContentLoaded", () => {
           message += `Group ${identifier}: Success\n`;
         }
       });
-      
+
       const successMsg = `Successfully added ${targetType} "${displayName}" to groups`;
       const errorMsg = `Some groups could not be added for ${targetType} "${displayName}"\n${message}`;
       showNotification(success ? successMsg : errorMsg, success ? 'success' : 'error');
@@ -861,7 +1177,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const body = JSON.stringify({
       "@odata.id": `https://graph.microsoft.com/beta/directoryObjects/${directoryId}`
     });
-    
+
     try {
       await fetchJSON(postUrl, {
         method: "POST",
@@ -876,33 +1192,33 @@ document.addEventListener("DOMContentLoaded", () => {
   const handleRemoveFromGroups = async () => {
     const targetType = state.targetMode === 'device' ? 'device' : 'user';
     logMessage(`removeFromGroups clicked (${targetType} mode)`);
-    
+
     const allSelected = getAllSelectedGroups();
     if (!allSelected.hasAnySelection) {
       logMessage("removeFromGroups: No groups selected");
       alert("Select at least one group from search results or table rows.");
       return;
     }
-    
+
     // Show notification with count
     const totalCount = allSelected.searchResults.length + allSelected.tableSelections.length;
     showNotification(`Removing ${targetType} from ${totalCount} group(s)...`, 'info');
-    
+
     try {
       const { mdmDeviceId } = await verifyMdmUrl();
       const token = await getToken();
       logMessage(`removeFromGroups: Extracted mdmDeviceId ${mdmDeviceId}`);
-      
+
       const { directoryId, displayName } = await getDirectoryObjectId(mdmDeviceId, token, state.targetMode);
       logMessage(`removeFromGroups: Got directory ID for ${targetType}: ${directoryId}`);
-      
+
       const promises = [];
-      
+
       // Process search result groups (existing logic with group IDs)
       allSelected.searchResults.forEach(group => {
         promises.push(removeFromSingleGroup(group.id, directoryId, token, group.name));
       });
-      
+
       // Process table selection groups (need to resolve names to IDs)
       for (const groupName of allSelected.tableSelections) {
         try {
@@ -910,7 +1226,7 @@ document.addEventListener("DOMContentLoaded", () => {
             method: "GET",
             headers: { "Authorization": token, "Content-Type": "application/json" }
           });
-          
+
           if (groupData.value && groupData.value.length > 0) {
             const groupId = groupData.value[0].id;
             promises.push(removeFromSingleGroup(groupId, directoryId, token, groupName));
@@ -921,7 +1237,7 @@ document.addEventListener("DOMContentLoaded", () => {
           promises.push(Promise.resolve({ groupName, error: e.message }));
         }
       }
-      
+
       const results = await Promise.all(promises);
       let success = true;
       let message = '';
@@ -935,7 +1251,7 @@ document.addEventListener("DOMContentLoaded", () => {
           message += `Group ${identifier}: Success\n`;
         }
       });
-      
+
       const successMsg = `Successfully removed ${targetType} "${displayName}" from groups`;
       const errorMsg = `Some groups could not be removed for ${targetType} "${displayName}"\n${message}`;
       showNotification(success ? successMsg : errorMsg, success ? 'success' : 'error');
@@ -948,7 +1264,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Helper function to remove from a single group
   const removeFromSingleGroup = async (groupId, directoryId, token, groupName = null) => {
     const deleteUrl = `https://graph.microsoft.com/v1.0/groups/${groupId}/members/${directoryId}/$ref`;
-    
+
     try {
       const response = await fetch(deleteUrl, {
         method: "DELETE",
@@ -966,10 +1282,13 @@ document.addEventListener("DOMContentLoaded", () => {
     showNotification('Fetching configuration assignments...', 'info');
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
-    
+
+    // Clear table selection before loading new assignments
+    clearTableSelection();
+
     // Clear dynamic groups tracking before fetching new assignments
     clearDynamicGroups();
-    
+
     try {
       const { mdmDeviceId } = await verifyMdmUrl();
       const token = await getToken();
@@ -977,10 +1296,10 @@ document.addEventListener("DOMContentLoaded", () => {
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
-      
+
       // Update device name display
       updateDeviceNameDisplay(deviceData);
-      
+
       const azureADDeviceId = deviceData.azureADDeviceId;
       const userPrincipalName = deviceData.userPrincipalName;
       if (!azureADDeviceId) throw new Error("Could not find Azure AD Device ID for this device.");
@@ -1016,7 +1335,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const policies = reportData.Values || [];
       if (policies.length === 0) {
         showNotification('No policies found.', 'info');
-        document.getElementById("configTableBody").innerHTML = '';
+        clearTableAndPagination();
         return;
       }
       const assignmentsPromises = policies.map(async (row) => {
@@ -1090,6 +1409,9 @@ document.addEventListener("DOMContentLoaded", () => {
     showNotification('Fetching compliance policies...', 'info');
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
+
+    // Clear table selection before loading new assignments
+    clearTableSelection();
     let token, mdmDeviceId;
     try {
       ({ mdmDeviceId } = await verifyMdmUrl());
@@ -1098,10 +1420,10 @@ document.addEventListener("DOMContentLoaded", () => {
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
-      
+
       // Update device name display
       updateDeviceNameDisplay(deviceData);
-      
+
       const azureADDeviceId = deviceData.azureADDeviceId;
       const userPrincipalName = deviceData.userPrincipalName;
       if (!azureADDeviceId) throw new Error("Could not find Azure AD Device ID for this device.");
@@ -1150,7 +1472,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (policies.length === 0) {
         logMessage("checkCompliance: No compliance policies found");
         showNotification('No compliance policies found.', 'info');
-        document.getElementById("configTableBody").innerHTML = '';
+        clearTableAndPagination();
         return;
       }
       const formattedPolicies = policies.map(policy => ({
@@ -1175,7 +1497,7 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       const policiesWithAssignments = await Promise.all(assignmentPromises);
       if (!policiesWithAssignments || policiesWithAssignments.length === 0) {
-        document.getElementById("configTableBody").innerHTML = '';
+        clearTableAndPagination();
         showNotification('No compliance policies found.', 'info');
         return;
       }
@@ -1187,16 +1509,16 @@ document.addEventListener("DOMContentLoaded", () => {
             const targetType = (asg.target['@odata.type'] || '').toLowerCase();
             const isExclusion = targetType.includes('exclusion');
             if (isExclusion) return; // Skip exclusions
-            
+
             if (targetType.includes('groupassignmenttarget')) {
               const groupId = asg.target.groupId;
               const groupName = allGroups.has(groupId)
                 ? allGroups.get(groupId)
-                : `Group ID: ${groupId.substring(0,8)}...`;
-                
+                : `Group ID: ${groupId.substring(0, 8)}...`;
+
               // Skip unresolved group IDs
               if (groupName.startsWith('Group ID:')) return;
-              
+
               targets.push({
                 groupName,
                 membershipType: isExclusion ? 'Exclude' : 'Direct',
@@ -1282,6 +1604,9 @@ document.addEventListener("DOMContentLoaded", () => {
     showNotification('Fetching app assignments...', 'info');
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
+
+    // Clear table selection before loading new assignments
+    clearTableSelection();
     let token;
     try {
       const { mdmDeviceId } = await verifyMdmUrl();
@@ -1290,10 +1615,10 @@ document.addEventListener("DOMContentLoaded", () => {
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
-      
+
       // Update device name display
       updateDeviceNameDisplay(deviceData);
-      
+
       const azureADDeviceId = deviceData.azureADDeviceId;
       const userPrincipalName = deviceData.userPrincipalName;
       if (!azureADDeviceId) throw new Error("Could not find Azure AD Device ID for this device.");
@@ -1358,10 +1683,10 @@ document.addEventListener("DOMContentLoaded", () => {
           if (!assignment.target) return;
           const intentInfo = assignment.intent || app.mobileAppIntent;
           const typeRaw = (assignment.target['@odata.type'] || '').toLowerCase();
-          
+
           // Skip exclusions
           if (typeRaw.includes('exclusion')) return;
-          
+
           if (typeRaw.includes('alldevicesassignmenttarget')) {
             validTargets.push({
               groupName: 'All Devices',
@@ -1378,11 +1703,11 @@ document.addEventListener("DOMContentLoaded", () => {
             });
           } else if (typeRaw.includes('groupassignmenttarget')) {
             const groupId = assignment.target.groupId;
-            const groupName = allGroups.has(groupId) ? allGroups.get(groupId) : 'Group ID: ' + groupId.substring(0,8) + '...';
-            
+            const groupName = allGroups.has(groupId) ? allGroups.get(groupId) : 'Group ID: ' + groupId.substring(0, 8) + '...';
+
             // Skip unresolved group IDs
             if (groupName.startsWith('Group ID:')) return;
-            
+
             validTargets.push({
               groupId,
               groupName,
@@ -1430,6 +1755,9 @@ document.addEventListener("DOMContentLoaded", () => {
     showNotification('Fetching PowerShell profiles...', 'info');
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
+
+    // Clear table selection before loading new assignments
+    clearTableSelection();
     let token;
     try {
       const { mdmDeviceId } = await verifyMdmUrl();
@@ -1438,10 +1766,10 @@ document.addEventListener("DOMContentLoaded", () => {
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
-      
+
       // Update device name display
       updateDeviceNameDisplay(deviceData);
-      
+
       const azureADDeviceId = deviceData.azureADDeviceId;
       const userPrincipalName = deviceData.userPrincipalName;
       if (!azureADDeviceId) throw new Error("Could not find Azure AD Device ID for this device.");
@@ -1467,7 +1795,7 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       if (!scriptsData.value || scriptsData.value.length === 0) {
         showNotification('No PowerShell profiles found.', 'info');
-        document.getElementById("configTableBody").innerHTML = '';
+        clearTableAndPagination();
         return;
       }
       const matchedScripts = [];
@@ -1537,7 +1865,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   };
 
-    // Handle Group Creation
+  // Handle Group Creation
   const handleCreateGroup = async () => {
     logMessage("createGroup clicked");
     const groupName = document.getElementById("groupSearchInput").value.trim();
@@ -1575,25 +1903,25 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
   };
-  
+
   // Handle Collecting Log Files
   const handleCollectLogs = async () => {
     logMessage("collectLogs clicked");
-    
+
     // Prompt user for log paths and AppID
     const logPathsPrompt = "Enter log paths (supported folders: %PROGRAMFILES%, %PROGRAMDATA%, %PUBLIC%, %WINDIR%, %TEMP%, %TMP%). Delimit paths with semicolons (;)";
 
     const logPaths = prompt(logPathsPrompt, "%PROGRAMDATA%\\Microsoft\\IntuneManagementExtension\\Logs\\IntuneManagementExtension.log");
-    
+
     if (!logPaths) {
       logMessage("collectLogs: No log paths entered");
       showNotification("Log collection canceled.", "info");
       return;
     }
-    
+
     const appIdPrompt = "Enter Intune Win32 application ID to initialize log collection (recommend using a dummy app ID)";
     const appId = prompt(appIdPrompt, "");
-    
+
     if (!appId) {
       logMessage("collectLogs: No AppID entered");
       showNotification("AppID is required for log collection.", "error");
@@ -1603,32 +1931,32 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       const { mdmDeviceId } = await verifyMdmUrl();
       const token = await getToken();
-        // Get device data to find the primary user
+      // Get device data to find the primary user
       const deviceData = await fetchJSON(`https://graph.microsoft.com/beta/deviceManagement/manageddevices('${mdmDeviceId}')`, {
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
-      
+
       // Update device name display
       updateDeviceNameDisplay(deviceData);
-      
+
       const userPrincipalName = deviceData.userPrincipalName;
       if (!userPrincipalName || userPrincipalName === 'Unknown user') {
         throw new Error("No primary user found for this device.");
       }
-      
+
       // Get the user ID
       const userData = await fetchJSON(`https://graph.microsoft.com/beta/users?$filter=userPrincipalName eq '${encodeURIComponent(userPrincipalName)}'`, {
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
-      
+
       if (!userData.value || userData.value.length === 0) {
         throw new Error("User not found in Azure AD.");
       }
-      
+
       const userObjectId = userData.value[0].id;
-      
+
       // Format the log paths for the API - with proper escaping
       const logPathsArray = [];
       logPaths.split(';').forEach(path => {
@@ -1640,33 +1968,33 @@ document.addEventListener("DOMContentLoaded", () => {
           logPathsArray.push(`"${escapedPath}"`);
         }
       });
-      
+
       if (logPathsArray.length === 0) {
         throw new Error("No valid log paths provided.");
       }
-      
+
       // Create raw JSON string with exactly the format needed
       // Note: We're manually constructing the JSON to avoid extra escaping by JSON.stringify
       const rawJsonBody = `{
         "customLogFolders": [${logPathsArray.join(', ')}],
         "id": "${userObjectId}_${mdmDeviceId}_${appId}"
       }`;
-      
+
       logMessage(`collectLogs: Log paths: ${JSON.stringify(logPathsArray)}`);
       logMessage(`collectLogs: Requesting logs for user ${userObjectId}, device ${mdmDeviceId}, app ${appId}`);
-      
+
       // Make the API call
       const requestUrl = `https://graph.microsoft.com/beta/users('${userObjectId}')/mobileAppTroubleshootingEvents('${mdmDeviceId}_${appId}')/appLogCollectionRequests`;
-      
+
       const logResult = await fetchJSON(requestUrl, {
         method: "POST",
-        headers: { 
-          "Authorization": token, 
-          "Content-Type": "application/json" 
+        headers: {
+          "Authorization": token,
+          "Content-Type": "application/json"
         },
         body: rawJsonBody
       });
-      
+
       logMessage("collectLogs: Log collection request successful");
       showNotification("Log collection initiated successfully. The logs will be collected on the device and uploaded to Intune.", "success");
     } catch (error) {
@@ -1693,11 +2021,11 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("appsAssignment").addEventListener("click", handleAppsAssignment);
   document.getElementById("pwshProfiles").addEventListener("click", handlePwshProfiles);
   document.getElementById("collectLogs").addEventListener("click", handleCollectLogs);
-  document.getElementById("createGroup").addEventListener("click", handleCreateGroup);  document.getElementById("groupResults").addEventListener("change", (event) => {
+  document.getElementById("createGroup").addEventListener("click", handleCreateGroup); document.getElementById("groupResults").addEventListener("change", (event) => {
     if (event.target.type === "checkbox") {
       // Clear table selections when selecting checkboxes
       clearTableSelection();
-      
+
       chrome.storage.local.get(['lastSearchResults'], (data) => {
         if (data.lastSearchResults) {
           const updated = data.lastSearchResults.map(group =>
@@ -1708,7 +2036,7 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
   });
-  document.querySelector('th.sortable').addEventListener('click', function() {
+  document.querySelector('th.sortable').addEventListener('click', function () {
     state.sortDirection = state.sortDirection === 'asc' ? 'desc' : 'asc';
     this.classList.toggle('asc');
     this.classList.toggle('desc');
@@ -1733,6 +2061,39 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   // Theme toggle button
   document.getElementById("theme-toggle").addEventListener("click", toggleTheme);
+
+  // Pagination event listeners
+  document.getElementById("prevPageBtn").addEventListener("click", () => {
+    if (state.pagination.currentPage > 1) {
+      goToPage(state.pagination.currentPage - 1);
+    }
+  });
+
+  document.getElementById("nextPageBtn").addEventListener("click", () => {
+    if (state.pagination.currentPage < state.pagination.totalPages) {
+      goToPage(state.pagination.currentPage + 1);
+    }
+  });
+
+  // Keyboard navigation for pagination
+  document.addEventListener('keydown', (e) => {
+    // Only handle pagination keys when table is visible and has data
+    if (state.pagination.totalItems > 0) {
+      if (e.key === 'ArrowLeft' && e.ctrlKey && state.pagination.currentPage > 1) {
+        e.preventDefault();
+        goToPage(state.pagination.currentPage - 1);
+      } else if (e.key === 'ArrowRight' && e.ctrlKey && state.pagination.currentPage < state.pagination.totalPages) {
+        e.preventDefault();
+        goToPage(state.pagination.currentPage + 1);
+      } else if (e.key === 'Home' && e.ctrlKey && state.pagination.currentPage > 1) {
+        e.preventDefault();
+        goToPage(1);
+      } else if (e.key === 'End' && e.ctrlKey && state.pagination.currentPage < state.pagination.totalPages) {
+        e.preventDefault();
+        goToPage(state.pagination.totalPages);
+      }
+    }
+  });
 
   // Target mode toggle buttons
   document.getElementById("deviceModeBtn").addEventListener("click", () => handleTargetModeToggle('device'));
