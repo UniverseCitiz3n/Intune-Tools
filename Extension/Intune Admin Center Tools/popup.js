@@ -730,15 +730,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // handleTargetModeToggle: Handle switching between device and user modes
   const handleTargetModeToggle = (mode) => {
-    if (state.targetMode === mode) return; // No change needed
+    logMessage(`handleTargetModeToggle: Called with mode '${mode}', current state is '${state.targetMode}'`);
+    
+    if (state.targetMode === mode) {
+      logMessage(`handleTargetModeToggle: No change needed - already in ${mode} mode`);
+      return; // No change needed
+    }
 
     state.targetMode = mode;
+    logMessage(`handleTargetModeToggle: State updated to '${mode}'`);
 
     // Update UI
     document.querySelectorAll('.target-type-toggle button').forEach(btn => {
       btn.classList.remove('active');
     });
     document.querySelector(`[data-mode="${mode}"]`).classList.add('active');
+    logMessage(`handleTargetModeToggle: UI updated - '${mode}' button is now active`);
 
     updateButtonText();
 
@@ -922,10 +929,13 @@ document.addEventListener("DOMContentLoaded", () => {
       (data) => {
         // Restore target mode
         if (data.targetMode) {
-          state.targetMode = data.targetMode;
+          logMessage(`restoreFilterValue: Restoring target mode to '${data.targetMode}' from storage`);
+          // Don't set state.targetMode first - let handleTargetModeToggle do it
           handleTargetModeToggle(data.targetMode);
         } else {
-          updateButtonText(); // Ensure buttons show correct text on first load
+          logMessage(`restoreFilterValue: No stored target mode, using default '${state.targetMode}'`);
+          // Ensure UI reflects the default state on first load
+          handleTargetModeToggle(state.targetMode);
         }
 
         if (data.currentDisplayType) {
