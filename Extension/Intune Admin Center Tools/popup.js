@@ -461,14 +461,18 @@ document.addEventListener("DOMContentLoaded", () => {
       const rowData = { scriptName: script.scriptName, targetName: script.targetName };
       const rowId = generateRowId(rowData);
       
-      // Check if this is a virtual assignment that should be disabled
+      // Check if this is a virtual assignment or dynamic group
       const isVirtualAssignment = script.targetName === 'All Devices' || script.targetName === 'All Users';
-      const disabledClass = isVirtualAssignment ? 'table-row-disabled' : 'table-row-selectable';
+      const isDynamicGroupAssignment = script.targetGroupId && isDynamicGroup(script.targetGroupId);
+      const isDisabled = isVirtualAssignment || isDynamicGroupAssignment;
+      const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
 
       // Add tooltip for disabled rows
       let tooltipText = '';
       if (isVirtualAssignment) {
         tooltipText = ' title="Virtual group"';
+      } else if (isDynamicGroupAssignment) {
+        tooltipText = ' title="Dynamic group – cannot modify manually"';
       }
 
       rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}" data-row-id="${rowId}"${tooltipText}>
@@ -534,7 +538,7 @@ document.addEventListener("DOMContentLoaded", () => {
           reject(new Error(error));
         }
       });
-    });
+    });  
   };  // getAllGroupsMap: Get groups map (device & user) for lookups, with dynamic group tracking
   const getAllGroupsMap = async (deviceObjectId, userObjectId, token) => {
     const headers = {
@@ -1856,7 +1860,8 @@ document.addEventListener("DOMContentLoaded", () => {
             matchedScripts.push({
               scriptName: script.displayName,
               description: script.description || '',
-              targetName
+              targetName,
+              targetGroupId: asg.target.groupId || null // Include group ID for dynamic group checking
             });
           }
         });
