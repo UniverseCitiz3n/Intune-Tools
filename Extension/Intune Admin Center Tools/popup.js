@@ -861,6 +861,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.currentDisplayType = 'config';
       chrome.storage.local.set({ currentDisplayType: state.currentDisplayType });
     }
+    state.pagination.itemsPerPage = 10;
     updateTableHeaders('config');
     assignments.sort((a, b) => a.policyName.localeCompare(b.policyName));
     if (state.sortDirection === 'desc') assignments.reverse();
@@ -894,13 +895,12 @@ document.addEventListener("DOMContentLoaded", () => {
       state.currentDisplayType = 'groupMembers';
       chrome.storage.local.set({ currentDisplayType: state.currentDisplayType });
     }
+    state.pagination.itemsPerPage = 100;
     updateTableHeaders('groupMembers');
     members.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
     if (state.sortDirection === 'desc') members.reverse();
 
-    const displayMembers = members.length > 100 ? members.slice(0, 100) : members;
-
-    const flattenedData = displayMembers.map(m => ({
+    const flattenedData = members.map(m => ({
       displayName: m.displayName || '',
       userPrincipalName: m.userPrincipalName || '',
       deviceId: m.deviceId || '',
@@ -924,6 +924,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.currentDisplayType = 'apps';
       chrome.storage.local.set({ currentDisplayType: state.currentDisplayType });
     }
+    state.pagination.itemsPerPage = 10;
     updateTableHeaders('apps');
     assignments.sort((a, b) => a.appName.localeCompare(b.appName));
     if (state.sortDirection === 'desc') assignments.reverse();
@@ -960,6 +961,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.currentDisplayType = 'compliance';
       chrome.storage.local.set({ currentDisplayType: state.currentDisplayType });
     }
+    state.pagination.itemsPerPage = 10;
     updateTableHeaders('compliance');
     assignments.sort((a, b) => a.policyName.localeCompare(b.policyName));
     if (state.sortDirection === 'desc') assignments.reverse();
@@ -994,6 +996,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.currentDisplayType = 'pwsh';
       chrome.storage.local.set({ currentDisplayType: state.currentDisplayType });
     }
+    state.pagination.itemsPerPage = 10;
     updateTableHeaders('pwsh');
     assignments.sort((a, b) => a.scriptName.localeCompare(b.scriptName));
     if (state.sortDirection === 'desc') assignments.reverse();
@@ -1387,16 +1390,21 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const fetchAllGroupMembers = async (groupId, token) => {
     let members = [];
-    let url = `https://graph.microsoft.com/v1.0/groups/${groupId}/transitiveMembers?$select=id,displayName,userPrincipalName,deviceId,@odata.type`;
+    let totalCount = 0;
+    let url = `https://graph.microsoft.com/v1.0/groups/${groupId}/transitiveMembers?$select=id,displayName,userType,appId,mail,onPremisesSyncEnabled,deviceId,userPrincipalName,@odata.type&$top=999&$orderby=displayName%20asc&$count=true`;
+    const headers = {
+      "Authorization": token,
+      "Content-Type": "application/json",
+      "ConsistencyLevel": "eventual"
+    };
     while (url) {
-      const data = await fetchJSON(url, {
-        method: "GET",
-        headers: { "Authorization": token, "Content-Type": "application/json" }
-      });
+      const data = await fetchJSON(url, { method: "GET", headers });
       if (data.value) members = members.concat(data.value);
+      if (!totalCount && data['@odata.count']) totalCount = data['@odata.count'];
       url = data['@odata.nextLink'] || null;
     }
-    return members.filter(m => m['@odata.type'] !== '#microsoft.graph.group');
+    members = members.filter(m => m['@odata.type'] !== '#microsoft.graph.group');
+    return { members, totalCount: totalCount || members.length };
   };
 
   // Handle Checking Group Members
@@ -1418,12 +1426,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       const token = await getToken();
-      const members = await fetchAllGroupMembers(groupId, token);
+      const { members, totalCount } = await fetchAllGroupMembers(groupId, token);
 
       chrome.storage.local.remove(['lastConfigAssignments','lastAppAssignments','lastComplianceAssignments','lastPwshAssignments']);
       chrome.storage.local.set({ lastGroupMembers: members });
 
-      document.getElementById('deviceNameDisplay').textContent = `- ${groupName} (${members.length} members)`;
+      document.getElementById('deviceNameDisplay').textContent = `- ${groupName} (${totalCount} members)`;
 
       updateGroupMembersTable(members);
 
