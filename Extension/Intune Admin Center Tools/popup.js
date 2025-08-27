@@ -695,7 +695,24 @@ document.addEventListener("DOMContentLoaded", () => {
         chrome.storage.local.set({ lastSearchResults: updated });
       }
     });
-  }; const getSelectedGroupNames = () => {
+    updateActionButtonsState();
+  };
+
+  const updateActionButtonsState = () => {
+    const selected = document.querySelectorAll('#groupResults input[type=checkbox]:checked');
+    const hasDynamic = Array.from(selected).some(cb => isDynamicGroup(cb.value));
+    ['addToGroups', 'removeFromGroups'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (!btn) return;
+      if (hasDynamic) {
+        btn.classList.add('disabled');
+      } else {
+        btn.classList.remove('disabled');
+      }
+    });
+  };
+
+  const getSelectedGroupNames = () => {
     const selectedGroups = [];
     document.querySelectorAll('.table-row-selected').forEach(row => {
       let groupNameCell;
@@ -717,7 +734,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return [...new Set(selectedGroups)]; // Remove duplicates
   };
   const getAllSelectedGroups = () => {
-    // Get groups from search results (existing functionality) - filter out dynamic groups
+    // Get groups from search results (exclude dynamic groups from operations)
     const searchResultGroups = [];
     const searchCheckboxes = document.querySelectorAll("#groupResults input[type=checkbox]:checked");
     searchCheckboxes.forEach(cb => {
@@ -881,7 +898,7 @@ document.addEventListener("DOMContentLoaded", () => {
     members.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
     if (state.sortDirection === 'desc') members.reverse();
 
-    const displayMembers = updateDisplay && members.length > 100 ? members.slice(0, 100) : members;
+    const displayMembers = members.length > 100 ? members.slice(0, 100) : members;
 
     const flattenedData = displayMembers.map(m => ({
       displayName: m.displayName || '',
@@ -1074,28 +1091,22 @@ document.addEventListener("DOMContentLoaded", () => {
           checkbox.dataset.groupName = group.displayName;
           if (group.checked) checkbox.checked = true;
 
-          // Disable checkbox for dynamic groups
           if (group.isDynamic) {
-            checkbox.disabled = true;
             checkbox.title = "Dynamic group – cannot modify manually";
           }
           const span = document.createElement("span");
           span.textContent = group.displayName;
-
-          // Apply visual styling for dynamic groups
           if (group.isDynamic) {
-            span.style.color = "#9e9e9e"; // Muted gray color
-            span.style.fontStyle = "italic";
             span.title = "Dynamic group – cannot modify manually";
-          } else {
-            span.style.color = "black";
           }
+
 
           label.appendChild(checkbox);
           label.appendChild(span);
           item.appendChild(label);
           resultsDiv.appendChild(item);
         });
+        updateActionButtonsState();
       }
     });
   };
@@ -1161,26 +1172,21 @@ document.addEventListener("DOMContentLoaded", () => {
         checkbox.className = "filled-in";
         checkbox.dataset.groupName = group.displayName;
 
-        // Disable checkbox for dynamic groups
         if (group.isDynamic) {
-          checkbox.disabled = true;
           checkbox.title = "Dynamic group – cannot modify manually";
         }
 
         const span = document.createElement("span");
-        span.textContent = group.displayName;          // Apply visual styling for dynamic groups
+        span.textContent = group.displayName;
         if (group.isDynamic) {
-          span.style.color = "#9e9e9e"; // Muted gray color
-          span.style.fontStyle = "italic";
           span.title = "Dynamic group – cannot modify manually";
-        } else {
-          span.style.color = "black";
         }
 
         label.appendChild(checkbox);
         label.appendChild(span);
         item.appendChild(label); resultsDiv.appendChild(item);
       });
+      updateActionButtonsState();
 
       chrome.storage.local.set({ lastSearchResults: searchResults, lastSearchQuery: query });
     } catch (error) {
@@ -1193,6 +1199,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const handleAddToGroups = async () => {
     const targetType = state.targetMode === 'device' ? 'device' : 'user';
     logMessage(`addToGroups clicked (${targetType} mode)`);
+
+    if (document.getElementById('addToGroups').classList.contains('disabled')) {
+      showNotification('Cannot modify dynamic groups.', 'error');
+      return;
+    }
 
     const allSelected = getAllSelectedGroups();
     if (!allSelected.hasAnySelection) {
@@ -1284,6 +1295,11 @@ document.addEventListener("DOMContentLoaded", () => {
     const targetType = state.targetMode === 'device' ? 'device' : 'user';
     logMessage(`removeFromGroups clicked (${targetType} mode)`);
 
+    if (document.getElementById('removeFromGroups').classList.contains('disabled')) {
+      showNotification('Cannot modify dynamic groups.', 'error');
+      return;
+    }
+
     const allSelected = getAllSelectedGroups();
     if (!allSelected.hasAnySelection) {
       logMessage("removeFromGroups: No groups selected");
@@ -1371,7 +1387,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const fetchAllGroupMembers = async (groupId, token) => {
     let members = [];
-    let url = `https://graph.microsoft.com/v1.0/groups/${groupId}/members?$select=id,displayName,userPrincipalName,deviceId`;
+    let url = `https://graph.microsoft.com/v1.0/groups/${groupId}/transitiveMembers?$select=id,displayName,userPrincipalName,deviceId,@odata.type`;
     while (url) {
       const data = await fetchJSON(url, {
         method: "GET",
@@ -1380,7 +1396,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (data.value) members = members.concat(data.value);
       url = data['@odata.nextLink'] || null;
     }
-    return members;
+    return members.filter(m => m['@odata.type'] !== '#microsoft.graph.group');
   };
 
   // Handle Checking Group Members
@@ -2177,6 +2193,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (event.target.type === "checkbox") {
       // Clear table selections when selecting checkboxes
       clearTableSelection();
+      updateActionButtonsState();
 
       chrome.storage.local.get(['lastSearchResults'], (data) => {
         if (data.lastSearchResults) {
