@@ -1389,22 +1389,44 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const fetchAllGroupMembers = async (groupId, token) => {
-    let members = [];
-    let totalCount = 0;
-    let url = `https://graph.microsoft.com/v1.0/groups/${groupId}/transitiveMembers?$select=id,displayName,userType,appId,mail,onPremisesSyncEnabled,deviceId,userPrincipalName,@odata.type&$top=999&$orderby=displayName%20asc&$count=true`;
     const headers = {
       "Authorization": token,
       "Content-Type": "application/json",
       "ConsistencyLevel": "eventual"
     };
-    while (url) {
-      const data = await fetchJSON(url, { method: "GET", headers });
-      if (data.value) members = members.concat(data.value);
-      if (!totalCount && data['@odata.count']) totalCount = data['@odata.count'];
-      url = data['@odata.nextLink'] || null;
-    }
-    members = members.filter(m => m['@odata.type'] !== '#microsoft.graph.group');
-    return { members, totalCount: totalCount || members.length };
+    const baseSelect = 'id,displayName,userType,appId,mail,onPremisesSyncEnabled,deviceId,userPrincipalName,@odata.type';
+
+    const fetchPaged = async (initialUrl) => {
+      let results = [];
+      let url = initialUrl;
+      while (url) {
+        const data = await fetchJSON(url, { method: 'GET', headers });
+        if (data.value) results = results.concat(data.value);
+        url = data['@odata.nextLink'] || null;
+      }
+      return results;
+    };
+
+    const directUrl = `https://graph.microsoft.com/beta/groups/${groupId}/members?$select=${baseSelect}&$top=999&$orderby=displayName%20asc&$count=true`;
+    const transitiveUrl = `https://graph.microsoft.com/beta/groups/${groupId}/transitiveMembers?$select=${baseSelect}&$top=999&$orderby=displayName%20asc&$count=true`;
+
+    const [directMembers, transitiveMembers] = await Promise.all([
+      fetchPaged(directUrl),
+      fetchPaged(transitiveUrl)
+    ]);
+
+    const combined = [...directMembers, ...transitiveMembers];
+    const unique = [];
+    const seen = new Set();
+    combined.forEach(m => {
+      if (m['@odata.type'] === '#microsoft.graph.group') return; // skip nested groups
+      if (!seen.has(m.id)) {
+        seen.add(m.id);
+        unique.push(m);
+      }
+    });
+
+    return { members: unique, totalCount: unique.length };
   };
 
   // Handle Checking Group Members
