@@ -585,29 +585,39 @@ document.addEventListener("DOMContentLoaded", () => {
       "ConsistencyLevel": "eventual"
     };
 
-    // Endpoints to get group memberships with groupTypes
-    const endpoints = [
-      `https://graph.microsoft.com/beta/devices/${deviceObjectId}/memberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`,
+    // Separate endpoints for direct and transitive memberships
+    const directEndpoints = [
+      `https://graph.microsoft.com/beta/devices/${deviceObjectId}/memberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`
+    ];
+    
+    const transitiveEndpoints = [
       `https://graph.microsoft.com/beta/devices/${deviceObjectId}/transitiveMemberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`
     ];
 
     if (userObjectId) {
-      endpoints.push(
-        `https://graph.microsoft.com/beta/users/${userObjectId}/memberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`,
+      directEndpoints.push(
+        `https://graph.microsoft.com/beta/users/${userObjectId}/memberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`
+      );
+      transitiveEndpoints.push(
         `https://graph.microsoft.com/beta/users/${userObjectId}/transitiveMemberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`
       );
     }
 
-    const results = await Promise.all(
-      endpoints.map(url => fetchJSON(url, { method: "GET", headers }))
-    );
+    const [directResults, transitiveResults] = await Promise.all([
+      Promise.all(directEndpoints.map(url => fetchJSON(url, { method: "GET", headers }))),
+      Promise.all(transitiveEndpoints.map(url => fetchJSON(url, { method: "GET", headers })))
+    ]);
 
-    const groupMap = new Map();
+    const directGroupMap = new Map();
+    const transitiveGroupMap = new Map();
+    const allGroupsMap = new Map();
 
-    results.forEach(result => {
+    // Process direct group memberships
+    directResults.forEach(result => {
       (result.value || []).forEach(group => {
         if (group['@odata.type'] === '#microsoft.graph.group') {
-          groupMap.set(group.id, group.displayName);
+          directGroupMap.set(group.id, group.displayName);
+          allGroupsMap.set(group.id, group.displayName);
 
           // Track dynamic groups
           const isDynamic = group.groupTypes && group.groupTypes.includes('DynamicMembership');
@@ -618,7 +628,27 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     });
 
-    return groupMap;
+    // Process transitive group memberships
+    transitiveResults.forEach(result => {
+      (result.value || []).forEach(group => {
+        if (group['@odata.type'] === '#microsoft.graph.group') {
+          transitiveGroupMap.set(group.id, group.displayName);
+          allGroupsMap.set(group.id, group.displayName);
+
+          // Track dynamic groups
+          const isDynamic = group.groupTypes && group.groupTypes.includes('DynamicMembership');
+          if (isDynamic) {
+            addDynamicGroup(group.id);
+          }
+        }
+      });
+    });
+
+    return {
+      allGroups: allGroupsMap,
+      directGroups: directGroupMap,
+      transitiveGroups: transitiveGroupMap
+    };
   };
 
   // getDirectoryObjectId: Get directory object ID for device or user based on current mode
@@ -895,7 +925,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.currentDisplayType = 'groupMembers';
       chrome.storage.local.set({ currentDisplayType: state.currentDisplayType });
     }
-    state.pagination.itemsPerPage = 100;
+    state.pagination.itemsPerPage = 10;
     updateTableHeaders('groupMembers');
     members.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
     if (state.sortDirection === 'desc') members.reverse();
@@ -1391,30 +1421,190 @@ document.addEventListener("DOMContentLoaded", () => {
   const fetchAllGroupMembers = async (groupId, token) => {
     const headers = {
       "Authorization": token,
-      "Content-Type": "application/json"
+      "Content-Type": "application/json",
+      "ConsistencyLevel": "eventual"  // Required for advanced query capabilities
     };
-    const selectFields = 'id,displayName,userType,appId,mail,onPremisesSyncEnabled,deviceId,userPrincipalName,@odata.type';
+    // Note: @odata.type cannot be used in $select - it's always returned by default
+    const selectFields = 'id,displayName,userType,appId,mail,onPremisesSyncEnabled,deviceId,userPrincipalName';
 
-    const directUrl = `https://graph.microsoft.com/beta/groups/${groupId}/members?$select=${selectFields}&$top=999`;
-    const transitiveUrl = `https://graph.microsoft.com/beta/groups/${groupId}/transitiveMembers?$select=${selectFields}&$top=999`;
+    logMessage(`fetchAllGroupMembers: Fetching members for group ${groupId}`);
 
-    const [directRes, transitiveRes] = await Promise.all([
-      fetchJSON(directUrl, { method: 'GET', headers }),
-      fetchJSON(transitiveUrl, { method: 'GET', headers })
-    ]);
+    // First, verify we can access the group itself
+    try {
+      const groupInfoUrl = `https://graph.microsoft.com/beta/groups/${groupId}?$select=id,displayName,groupTypes,visibility,mailEnabled,securityEnabled`;
+      const groupInfo = await fetchJSON(groupInfoUrl, { method: 'GET', headers });
+      logMessage(`fetchAllGroupMembers: Successfully accessed group info: ${JSON.stringify(groupInfo)}`);
+    } catch (error) {
+      logMessage(`fetchAllGroupMembers: Failed to access group info - ${error.message}`);
+      throw new Error(`Cannot access group. ${error.message}`);
+    }
 
-    const combined = [...(directRes.value || []), ...(transitiveRes.value || [])];
-    const unique = [];
-    const seen = new Set();
-    combined.forEach(m => {
-      if (m['@odata.type'] === '#microsoft.graph.group') return;
-      if (!seen.has(m.id)) {
-        seen.add(m.id);
-        unique.push(m);
+    // Using beta endpoint to avoid known issue #25984 where v1.0 doesn't return service principals
+    const directUrl = `https://graph.microsoft.com/beta/groups/${groupId}/members?$select=${selectFields}&$top=999&$count=true`;
+    const transitiveUrl = `https://graph.microsoft.com/beta/groups/${groupId}/transitiveMembers?$select=${selectFields}&$top=999&$count=true`;
+
+    try {
+      logMessage(`fetchAllGroupMembers: Making API calls to:\n- Direct: ${directUrl}\n- Transitive: ${transitiveUrl}`);
+      
+      const [directRes, transitiveRes] = await Promise.all([
+        fetchJSON(directUrl, { method: 'GET', headers }),
+        fetchJSON(transitiveUrl, { method: 'GET', headers })
+      ]);
+
+      // Log the full response structure for debugging
+      logMessage(`fetchAllGroupMembers: Direct members full response: ${JSON.stringify(directRes)}`);
+      logMessage(`fetchAllGroupMembers: Transitive members full response: ${JSON.stringify(transitiveRes)}`);
+
+      // Check for errors in response
+      if (directRes.error || transitiveRes.error) {
+        logMessage(`fetchAllGroupMembers: API returned errors - falling back to basic request`);
+        throw new Error(`API Error: ${directRes.error?.message || transitiveRes.error?.message}`);
       }
-    });
 
-    return { members: unique, totalCount: unique.length };
+      logMessage(`fetchAllGroupMembers: Direct members response analysis: ${JSON.stringify({
+        hasValue: !!directRes.value,
+        valueType: typeof directRes.value,
+        isArray: Array.isArray(directRes.value),
+        count: directRes.value?.length || 0,
+        odataCount: directRes['@odata.count'],
+        odataContext: directRes['@odata.context'],
+        keys: Object.keys(directRes || {})
+      })}`);
+      
+      logMessage(`fetchAllGroupMembers: Transitive members response analysis: ${JSON.stringify({
+        hasValue: !!transitiveRes.value,
+        valueType: typeof transitiveRes.value,
+        isArray: Array.isArray(transitiveRes.value),
+        count: transitiveRes.value?.length || 0,
+        odataCount: transitiveRes['@odata.count'],
+        odataContext: transitiveRes['@odata.context'],
+        keys: Object.keys(transitiveRes || {})
+      })}`);
+
+      const directMembers = directRes.value || [];
+      const transitiveMembers = transitiveRes.value || [];
+      
+      // Combine both direct and transitive members
+      const combined = [...directMembers, ...transitiveMembers];
+      const unique = [];
+      const seen = new Set();
+      
+      combined.forEach(m => {
+        // Skip nested groups to avoid infinite recursion
+        if (m['@odata.type'] === '#microsoft.graph.group') {
+          logMessage(`fetchAllGroupMembers: Skipping nested group: ${m.displayName || m.id}`);
+          return;
+        }
+        
+        if (!seen.has(m.id)) {
+          seen.add(m.id);
+          unique.push(m);
+          logMessage(`fetchAllGroupMembers: Adding member: ${m.displayName || 'Unknown'} (${m['@odata.type'] || 'Unknown type'})`);
+        }
+      });
+
+      logMessage(`fetchAllGroupMembers: Final result - ${unique.length} unique members from ${combined.length} total entries`);
+      return { members: unique, totalCount: unique.length };
+      
+    } catch (error) {
+      logMessage(`fetchAllGroupMembers: Error fetching group members - ${error.message}`);
+      
+      // Try fallback approach with just direct members if transitive fails
+      try {
+        logMessage(`fetchAllGroupMembers: Trying fallback - direct members only`);
+        const fallbackRes = await fetchJSON(directUrl, { method: 'GET', headers });
+        logMessage(`fetchAllGroupMembers: Fallback response: ${JSON.stringify(fallbackRes)}`);
+        const fallbackMembers = fallbackRes.value || [];
+        
+        const unique = fallbackMembers.filter(m => m['@odata.type'] !== '#microsoft.graph.group');
+        logMessage(`fetchAllGroupMembers: Fallback successful - ${unique.length} direct members`);
+        
+        return { members: unique, totalCount: unique.length };
+      } catch (fallbackError) {
+        logMessage(`fetchAllGroupMembers: Fallback also failed - ${fallbackError.message}`);
+        // Continue to basic fallback approaches
+      }
+    }
+
+    // If we get here, try multiple basic approaches
+    logMessage(`fetchAllGroupMembers: Trying basic fallback approaches`);
+    
+    // Try 1: Basic request without advanced query parameters
+    try {
+      const basicUrl = `https://graph.microsoft.com/beta/groups/${groupId}/members`;
+      const basicHeaders = {
+        "Authorization": token,
+        "Content-Type": "application/json"
+      };
+      const basicRes = await fetchJSON(basicUrl, { method: 'GET', headers: basicHeaders });
+      logMessage(`fetchAllGroupMembers: Basic request response: ${JSON.stringify(basicRes)}`);
+      
+      if (basicRes.value && Array.isArray(basicRes.value)) {
+        // Filter out nested groups and return actual members
+        const basicMembers = basicRes.value.filter(m => m['@odata.type'] !== '#microsoft.graph.group');
+        logMessage(`fetchAllGroupMembers: Basic request returned ${basicMembers.length} non-group members out of ${basicRes.value.length} total`);
+        
+        if (basicMembers.length > 0) {
+          return { members: basicMembers, totalCount: basicMembers.length };
+        } else if (basicRes.value.length > 0) {
+          // All members were groups - this might be a nested group structure
+          logMessage(`fetchAllGroupMembers: All ${basicRes.value.length} members are groups - this appears to be a group containing only other groups`);
+          return { 
+            members: [], 
+            totalCount: 0,
+            note: `This group contains ${basicRes.value.length} nested groups but no direct user/device members` 
+          };
+        }
+      }
+    } catch (basicError) {
+      logMessage(`fetchAllGroupMembers: Basic request failed: ${basicError.message}`);
+    }
+    
+    // Try 2: Check if it's a security group with different approach
+    try {
+      const expandUrl = `https://graph.microsoft.com/beta/groups/${groupId}?$expand=members`;
+      const expandHeaders = {
+        "Authorization": token,
+        "Content-Type": "application/json"
+      };
+      const expandRes = await fetchJSON(expandUrl, { method: 'GET', headers: expandHeaders });
+      logMessage(`fetchAllGroupMembers: Expand request response: ${JSON.stringify(expandRes)}`);
+      
+      if (expandRes.members && Array.isArray(expandRes.members)) {
+        const expandMembers = expandRes.members.filter(m => m['@odata.type'] !== '#microsoft.graph.group');
+        logMessage(`fetchAllGroupMembers: Expand request returned ${expandMembers.length} non-group members`);
+        
+        if (expandMembers.length > 0) {
+          return { members: expandMembers, totalCount: expandMembers.length };
+        }
+      }
+    } catch (expandError) {
+      logMessage(`fetchAllGroupMembers: Expand request failed: ${expandError.message}`);
+    }
+    
+    // Try 3: Check for count only to see if there are members but we can't see them
+    try {
+      const countUrl = `https://graph.microsoft.com/beta/groups/${groupId}/members/$count`;
+      const countHeaders = {
+        "Authorization": token,
+        "Content-Type": "application/json",
+        "ConsistencyLevel": "eventual"
+      };
+      const countRes = await fetch(countUrl, { method: 'GET', headers: countHeaders });
+      const countText = await countRes.text();
+      logMessage(`fetchAllGroupMembers: Count request returned: ${countText}`);
+      
+      const memberCount = parseInt(countText, 10);
+      if (memberCount > 0) {
+        logMessage(`fetchAllGroupMembers: Group has ${memberCount} members but they're not visible - likely permission issue`);
+        throw new Error(`Group has ${memberCount} members but you don't have permission to view them. This may be a security group with hidden membership.`);
+      }
+    } catch (countError) {
+      logMessage(`fetchAllGroupMembers: Count request failed: ${countError.message}`);
+    }
+
+    // If we get here, the group truly appears to have no members
+    return { members: [], totalCount: 0 };
   };
 
   // Handle Checking Group Members
@@ -1434,21 +1624,56 @@ document.addEventListener("DOMContentLoaded", () => {
     const groupId = selected[0].value;
     const groupName = selected[0].dataset.groupName;
 
+    logMessage(`checkGroupMembers: Selected group - ID: ${groupId}, Name: ${groupName}`);
+
     try {
       const token = await getToken();
-      const { members, totalCount } = await fetchAllGroupMembers(groupId, token);
+      logMessage("checkGroupMembers: Token retrieved successfully");
 
+      showNotification(`Fetching members for group "${groupName}"...`, 'info');
+
+      const { members, totalCount, note } = await fetchAllGroupMembers(groupId, token);
+
+      logMessage(`checkGroupMembers: Retrieved ${totalCount} members for group ${groupName}`);
+
+      // Clear other data types from storage
       chrome.storage.local.remove(['lastConfigAssignments','lastAppAssignments','lastComplianceAssignments','lastPwshAssignments']);
       chrome.storage.local.set({ lastGroupMembers: members });
 
-      document.getElementById('deviceNameDisplay').textContent = `- ${groupName} (${totalCount} members)`;
+      // Update UI
+      let displayText = `- ${groupName} (${totalCount} members)`;
+      if (note) {
+        displayText += ` - ${note}`;
+      }
+      document.getElementById('deviceNameDisplay').textContent = displayText;
 
       updateGroupMembersTable(members);
 
-      showNotification('Group members loaded successfully', 'success');
+      if (totalCount === 0) {
+        if (note) {
+          showNotification(`Group "${groupName}" loaded. ${note}`, 'info');
+        } else {
+          showNotification(`Group "${groupName}" has no members or you don't have permission to view them.`, 'warning');
+        }
+      } else {
+        showNotification(`Successfully loaded ${totalCount} members for group "${groupName}".`, 'success');
+      }
+      
     } catch (error) {
       logMessage(`checkGroupMembers: Error - ${error.message}`);
-      showNotification('Failed to load group members: ' + error.message, 'error');
+      
+      let errorMessage = 'Failed to load group members: ' + error.message;
+      
+      // Provide more specific error messages for common issues
+      if (error.message.includes('403') || error.message.includes('Forbidden')) {
+        errorMessage = `Access denied. You don't have permission to view members of group "${groupName}". Contact your administrator.`;
+      } else if (error.message.includes('404') || error.message.includes('Not Found')) {
+        errorMessage = `Group "${groupName}" was not found or has been deleted.`;
+      } else if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+        errorMessage = 'Authentication failed. Please refresh the page and try again.';
+      }
+      
+      showNotification(errorMessage, 'error');
     }
   };
 
@@ -1498,7 +1723,7 @@ document.addEventListener("DOMContentLoaded", () => {
         userPromise = Promise.resolve(null);
       }
       const userObjectId = await userPromise;
-      const allGroups = await getAllGroupsMap(deviceObjectId, userObjectId, token);
+      const groupMaps = await getAllGroupsMap(deviceObjectId, userObjectId, token);
       const reportBody = JSON.stringify({
         top: "500",
         skip: "0",
@@ -1538,11 +1763,24 @@ document.addEventListener("DOMContentLoaded", () => {
             if (!asg.target) return;
             const typeRaw = (asg.target['@odata.type'] || "").toLowerCase().trim();
             if (typeRaw.includes("groupassignmenttarget")) {
-              if (allGroups.has(asg.target.groupId)) {
+              const groupId = asg.target.groupId;
+              if (groupMaps.allGroups.has(groupId)) {
+                // Determine membership type based on direct vs transitive membership
+                let membershipType = 'Direct';
+                const isDirectMember = groupMaps.directGroups.has(groupId);
+                const isTransitiveMember = groupMaps.transitiveGroups.has(groupId);
+                
+                if (!isDirectMember && isTransitiveMember) {
+                  membershipType = 'Transitive';
+                  logMessage(`checkGroups: Group ${groupMaps.allGroups.get(groupId)} (${groupId}) - Transitive membership detected`);
+                } else if (isDirectMember) {
+                  logMessage(`checkGroups: Group ${groupMaps.allGroups.get(groupId)} (${groupId}) - Direct membership detected`);
+                }
+                
                 targetObjs.push({
-                  groupId: asg.target.groupId,
-                  groupName: allGroups.get(asg.target.groupId),
-                  membershipType: 'Direct',
+                  groupId: groupId,
+                  groupName: groupMaps.allGroups.get(groupId),
+                  membershipType: membershipType,
                   targetType: typeRaw.includes('user') ? 'User' : 'Device',
                   intent: "Included"
                 });
@@ -1624,7 +1862,7 @@ document.addEventListener("DOMContentLoaded", () => {
         userPromise = Promise.resolve(null);
       }
       const userObjectId = await userPromise;
-      const allGroups = await getAllGroupsMap(deviceObjectId, userObjectId, token);
+      const groupMaps = await getAllGroupsMap(deviceObjectId, userObjectId, token);
       const reportBody = JSON.stringify({
         filter: `(DeviceId eq '${mdmDeviceId}') and ((PolicyPlatformType eq '4') or (PolicyPlatformType eq '5') or (PolicyPlatformType eq '6') or (PolicyPlatformType eq '8') or (PolicyPlatformType eq '100'))`,
         orderBy: ["PolicyName asc"]
@@ -1692,16 +1930,30 @@ document.addEventListener("DOMContentLoaded", () => {
 
             if (targetType.includes('groupassignmenttarget')) {
               const groupId = asg.target.groupId;
-              const groupName = allGroups.has(groupId)
-                ? allGroups.get(groupId)
+              const groupName = groupMaps.allGroups.has(groupId)
+                ? groupMaps.allGroups.get(groupId)
                 : `Group ID: ${groupId.substring(0, 8)}...`;
 
               // Skip unresolved group IDs
               if (groupName.startsWith('Group ID:')) return;
 
+              // Determine membership type based on direct vs transitive membership
+              let membershipType = isExclusion ? 'Exclude' : 'Direct';
+              if (!isExclusion) {
+                const isDirectMember = groupMaps.directGroups.has(groupId);
+                const isTransitiveMember = groupMaps.transitiveGroups.has(groupId);
+                
+                if (!isDirectMember && isTransitiveMember) {
+                  membershipType = 'Transitive';
+                  logMessage(`checkCompliance: Group ${groupName} (${groupId}) - Transitive membership detected`);
+                } else if (isDirectMember) {
+                  logMessage(`checkCompliance: Group ${groupName} (${groupId}) - Direct membership detected`);
+                }
+              }
+
               targets.push({
                 groupName,
-                membershipType: isExclusion ? 'Exclude' : 'Direct',
+                membershipType: membershipType,
                 targetType: targetType.includes('user') ? 'User' : 'Device'
               });
             } else if (targetType.includes('alldevicesassignmenttarget')) {
@@ -1821,7 +2073,7 @@ document.addEventListener("DOMContentLoaded", () => {
           userObjectId = userData.value[0].id;
         }
       }
-      const allGroups = await getAllGroupsMap(deviceObjectId, userObjectId, token);
+      const groupMaps = await getAllGroupsMap(deviceObjectId, userObjectId, token);
       const appRequests = [];
       appRequests.push(
         fetchJSON(`https://graph.microsoft.com/beta/users('00000000-0000-0000-0000-000000000000')/mobileAppIntentAndStates('${mdmDeviceId}')`, {
@@ -1885,15 +2137,27 @@ document.addEventListener("DOMContentLoaded", () => {
             });
           } else if (typeRaw.includes('groupassignmenttarget')) {
             const groupId = assignment.target.groupId;
-            const groupName = allGroups.has(groupId) ? allGroups.get(groupId) : 'Group ID: ' + groupId.substring(0, 8) + '...';
+            const groupName = groupMaps.allGroups.has(groupId) ? groupMaps.allGroups.get(groupId) : 'Group ID: ' + groupId.substring(0, 8) + '...';
 
             // Skip unresolved group IDs
             if (groupName.startsWith('Group ID:')) return;
 
+            // Determine membership type based on direct vs transitive membership
+            let membershipType = 'Direct';
+            const isDirectMember = groupMaps.directGroups.has(groupId);
+            const isTransitiveMember = groupMaps.transitiveGroups.has(groupId);
+            
+            if (!isDirectMember && isTransitiveMember) {
+              membershipType = 'Transitive';
+              logMessage(`appsAssignment: Group ${groupName} (${groupId}) - Transitive membership detected`);
+            } else if (isDirectMember) {
+              logMessage(`appsAssignment: Group ${groupName} (${groupId}) - Direct membership detected`);
+            }
+
             validTargets.push({
               groupId,
               groupName,
-              membershipType: 'Direct',
+              membershipType: membershipType,
               targetType: typeRaw.includes('user') ? 'User' : 'Device',
               intent: intentInfo
             });
@@ -1972,7 +2236,7 @@ document.addEventListener("DOMContentLoaded", () => {
         });
         if (userData.value && userData.value.length > 0) userObjectId = userData.value[0].id;
       }
-      const allGroups = await getAllGroupsMap(deviceObjectId, userObjectId, token);
+      const groupMaps = await getAllGroupsMap(deviceObjectId, userObjectId, token);
       const scriptsData = await fetchJSON("https://graph.microsoft.com/beta/deviceManagement/deviceManagementScripts?$expand=assignments", {
         method: "GET",
         headers: { "Authorization": token, "Content-Type": "application/json" }
@@ -1997,8 +2261,8 @@ document.addEventListener("DOMContentLoaded", () => {
           let targetName = '';
           let isMatch = false;
           if (asg.target.groupId) {
-            if (allGroups.has(asg.target.groupId)) {
-              targetName = allGroups.get(asg.target.groupId);
+            if (groupMaps.allGroups.has(asg.target.groupId)) {
+              targetName = groupMaps.allGroups.get(asg.target.groupId);
               isMatch = true;
               matchCount++;
               logMessage(`pwshProfiles: MATCH - Group ${targetName}`);
