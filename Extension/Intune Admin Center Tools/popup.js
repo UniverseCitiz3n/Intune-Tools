@@ -123,6 +123,19 @@ document.addEventListener("DOMContentLoaded", () => {
           updatePwshTable(filteredResults, false); // Pass false to avoid changing currentDisplayType
         }
       });
+    } else if (state.currentDisplayType === 'groupMembers') {
+      chrome.storage.local.get(['lastGroupMembers'], (data) => {
+        if (data.lastGroupMembers) {
+          const filteredResults = [...data.lastGroupMembers].filter(item => {
+            const name = (item.displayName || '').toLowerCase();
+            const upn = (item.userPrincipalName || '').toLowerCase();
+            const deviceId = (item.deviceId || '').toLowerCase();
+            return name.includes(filterText) || upn.includes(filterText) || deviceId.includes(filterText);
+          });
+
+          updateGroupMembersTable(filteredResults, false);
+        }
+      });
     }
   };
 
@@ -140,6 +153,11 @@ document.addEventListener("DOMContentLoaded", () => {
           return item.policyName.toLowerCase().includes(searchText);
         } else if (state.currentDisplayType === 'pwsh') {
           return item.scriptName.toLowerCase().includes(searchText);
+        } else if (state.currentDisplayType === 'groupMembers') {
+          const name = (item.displayName || '').toLowerCase();
+          const upn = (item.userPrincipalName || '').toLowerCase();
+          const deviceId = (item.deviceId || '').toLowerCase();
+          return name.includes(searchText) || upn.includes(searchText) || deviceId.includes(searchText);
         }
         return true;
       }) : data;
@@ -313,6 +331,8 @@ document.addEventListener("DOMContentLoaded", () => {
       renderComplianceTablePage(currentPageData);
     } else if (state.currentDisplayType === 'pwsh') {
       renderPwshTablePage(currentPageData);
+    } else if (state.currentDisplayType === 'groupMembers') {
+      renderGroupMembersTablePage(currentPageData);
     }
   };
 
@@ -492,6 +512,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // Restore selection state
     restoreRowSelection();
+  };
+
+  const renderGroupMembersTablePage = (members) => {
+    let rows = '';
+    let rowIndex = (state.pagination.currentPage - 1) * state.pagination.itemsPerPage;
+
+    members.forEach(member => {
+      const objectType = (member['@odata.type'] || '').split('.').pop();
+      const upnOrId = member.userPrincipalName || member.deviceId || '';
+      rows += `<tr data-row-index="${rowIndex}">
+        <td style="word-wrap: break-word; white-space: normal;">${member.displayName || ''}</td>
+        <td style="word-wrap: break-word; white-space: normal;">${upnOrId}</td>
+        <td style="word-wrap: break-word; white-space: normal;">${objectType}</td>
+      </tr>`;
+      rowIndex++;
+    });
+
+    document.getElementById("configTableBody").innerHTML = rows;
   };
 
   // fetchJSON: Helper to fetch and parse JSON responses
@@ -787,6 +825,12 @@ document.addEventListener("DOMContentLoaded", () => {
         <th class="sortable" style="word-wrap: break-word; white-space: normal;">Script Name</th>
         <th style="word-wrap: break-word; white-space: normal;">Description</th>
         <th style="word-wrap: break-word; white-space: normal;">Assignment Target</th>      `;
+    } else if (type === 'groupMembers') {
+      headerContent = `
+        <th class="sortable" style="word-wrap: break-word; white-space: normal;">Display Name</th>
+        <th style="word-wrap: break-word; white-space: normal;">UPN / Device ID</th>
+        <th style="word-wrap: break-word; white-space: normal;">Object Type</th>
+      `;
     }
     headerRow.innerHTML = headerContent;
     const sortableHeader = document.querySelector('th.sortable');
@@ -826,6 +870,36 @@ document.addEventListener("DOMContentLoaded", () => {
     const sortableHeader = document.querySelector('th.sortable');
     sortableHeader.classList.remove('desc');
     sortableHeader.classList.add('asc');
+  };
+
+  const updateGroupMembersTable = (members, updateDisplay = true) => {
+    if (updateDisplay) {
+      state.currentDisplayType = 'groupMembers';
+      chrome.storage.local.set({ currentDisplayType: state.currentDisplayType });
+    }
+    updateTableHeaders('groupMembers');
+    members.sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+    if (state.sortDirection === 'desc') members.reverse();
+
+    const displayMembers = updateDisplay && members.length > 100 ? members.slice(0, 100) : members;
+
+    const flattenedData = displayMembers.map(m => ({
+      displayName: m.displayName || '',
+      userPrincipalName: m.userPrincipalName || '',
+      deviceId: m.deviceId || '',
+      ['@odata.type']: m['@odata.type'] || ''
+    }));
+
+    updatePaginationState(flattenedData);
+
+    renderCurrentPage();
+    updatePaginationControls();
+
+    const sortableHeader = document.querySelector('th.sortable');
+    if (sortableHeader) {
+      sortableHeader.classList.remove('desc');
+      sortableHeader.classList.add('asc');
+    }
   };
   // updateAppTable: Update app assignments table (similar in structure)
   const updateAppTable = (assignments, updateDisplay = true) => {
@@ -929,7 +1003,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // ── State Restoration Functions ─────────────────────────────────────────
   const restoreFilterValue = () => {
     chrome.storage.local.get(
-      ['profileFilterValue', 'currentDisplayType', 'targetMode', 'lastComplianceAssignments', 'lastAppAssignments', 'lastConfigAssignments', 'lastPwshAssignments'],
+      ['profileFilterValue', 'currentDisplayType', 'targetMode', 'lastComplianceAssignments', 'lastAppAssignments', 'lastConfigAssignments', 'lastPwshAssignments', 'lastGroupMembers'],
       (data) => {
         // Restore target mode
         if (data.targetMode) {
@@ -955,8 +1029,11 @@ document.addEventListener("DOMContentLoaded", () => {
             chrome.storage.local.remove(['lastAppAssignments', 'lastComplianceAssignments', 'lastPwshAssignments']);
             updateConfigTable(data.lastConfigAssignments, false);
           } else if (state.currentDisplayType === 'pwsh' && data.lastPwshAssignments) {
-            chrome.storage.local.remove(['lastConfigAssignments', 'lastAppAssignments', 'lastComplianceAssignments']);
+            chrome.storage.local.remove(['lastConfigAssignments', 'lastAppAssignments', 'lastComplianceAssignments', 'lastGroupMembers']);
             updatePwshTable(data.lastPwshAssignments, false);
+          } else if (state.currentDisplayType === 'groupMembers' && data.lastGroupMembers) {
+            chrome.storage.local.remove(['lastConfigAssignments', 'lastAppAssignments', 'lastComplianceAssignments', 'lastPwshAssignments']);
+            updateGroupMembersTable(data.lastGroupMembers, false);
           }
         } else {
           clearTableAndPagination();
@@ -1290,12 +1367,65 @@ document.addEventListener("DOMContentLoaded", () => {
     } catch (e) {
       return { groupId, groupName, error: e.message };
     }
-  };  // Handle Checking Configuration Assignments
+  };
+
+  const fetchAllGroupMembers = async (groupId, token) => {
+    let members = [];
+    let url = `https://graph.microsoft.com/v1.0/groups/${groupId}/members?$select=id,displayName,userPrincipalName,deviceId`;
+    while (url) {
+      const data = await fetchJSON(url, {
+        method: "GET",
+        headers: { "Authorization": token, "Content-Type": "application/json" }
+      });
+      if (data.value) members = members.concat(data.value);
+      url = data['@odata.nextLink'] || null;
+    }
+    return members;
+  };
+
+  // Handle Checking Group Members
+  const handleCheckGroupMembers = async () => {
+    logMessage("checkGroupMembers clicked");
+    const selected = document.querySelectorAll("#groupResults input[type=checkbox]:checked");
+    if (selected.length !== 1) {
+      showNotification('Select exactly one group.', 'error');
+      return;
+    }
+
+    document.getElementById('profileFilterInput').value = '';
+    chrome.storage.local.set({ profileFilterValue: '' });
+
+    clearTableSelection();
+
+    const groupId = selected[0].value;
+    const groupName = selected[0].dataset.groupName;
+
+    try {
+      const token = await getToken();
+      const members = await fetchAllGroupMembers(groupId, token);
+
+      chrome.storage.local.remove(['lastConfigAssignments','lastAppAssignments','lastComplianceAssignments','lastPwshAssignments']);
+      chrome.storage.local.set({ lastGroupMembers: members });
+
+      document.getElementById('deviceNameDisplay').textContent = `- ${groupName} (${members.length} members)`;
+
+      updateGroupMembersTable(members);
+
+      showNotification('Group members loaded successfully', 'success');
+    } catch (error) {
+      logMessage(`checkGroupMembers: Error - ${error.message}`);
+      showNotification('Failed to load group members: ' + error.message, 'error');
+    }
+  };
+
+  // Handle Checking Configuration Assignments
   const handleCheckGroups = async () => {
     logMessage("checkGroups clicked");
     showNotification('Fetching configuration assignments...', 'info');
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
+
+    chrome.storage.local.remove(['lastAppAssignments', 'lastComplianceAssignments', 'lastPwshAssignments', 'lastGroupMembers']);
 
     // Clear table selection before loading new assignments
     clearTableSelection();
@@ -1423,6 +1553,8 @@ document.addEventListener("DOMContentLoaded", () => {
     showNotification('Fetching compliance policies...', 'info');
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
+
+    chrome.storage.local.remove(['lastConfigAssignments','lastAppAssignments','lastPwshAssignments','lastGroupMembers']);
 
     // Clear table selection before loading new assignments
     clearTableSelection();
@@ -1619,6 +1751,8 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
 
+    chrome.storage.local.remove(['lastConfigAssignments','lastComplianceAssignments','lastPwshAssignments','lastGroupMembers']);
+
     // Clear table selection before loading new assignments
     clearTableSelection();
     let token;
@@ -1769,6 +1903,8 @@ document.addEventListener("DOMContentLoaded", () => {
     showNotification('Fetching PowerShell profiles...', 'info');
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
+
+    chrome.storage.local.remove(['lastConfigAssignments','lastAppAssignments','lastComplianceAssignments','lastGroupMembers']);
 
     // Clear table selection before loading new assignments
     clearTableSelection();
@@ -2031,6 +2167,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("addToGroups").addEventListener("click", handleAddToGroups);
   document.getElementById("removeFromGroups").addEventListener("click", handleRemoveFromGroups);
   document.getElementById("checkGroups").addEventListener("click", handleCheckGroups);
+  document.getElementById("checkGroupMembers").addEventListener("click", handleCheckGroupMembers);
   document.getElementById("checkCompliance").addEventListener("click", handleCheckCompliance);
   document.getElementById("downloadScript").addEventListener("click", handleDownloadScript);
   document.getElementById("appsAssignment").addEventListener("click", handleAppsAssignment);
@@ -2071,6 +2208,10 @@ document.addEventListener("DOMContentLoaded", () => {
     } else if (state.currentDisplayType === 'pwsh') {
       chrome.storage.local.get(['lastPwshAssignments'], (data) => {
         if (data.lastPwshAssignments) updatePwshTable(data.lastPwshAssignments, false);
+      });
+    } else if (state.currentDisplayType === 'groupMembers') {
+      chrome.storage.local.get(['lastGroupMembers'], (data) => {
+        if (data.lastGroupMembers) updateGroupMembersTable(data.lastGroupMembers, false);
       });
     }
   });
