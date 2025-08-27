@@ -1391,35 +1391,23 @@ document.addEventListener("DOMContentLoaded", () => {
   const fetchAllGroupMembers = async (groupId, token) => {
     const headers = {
       "Authorization": token,
-      "Content-Type": "application/json",
-      "ConsistencyLevel": "eventual"
+      "Content-Type": "application/json"
     };
-    const baseSelect = 'id,displayName,userType,appId,mail,onPremisesSyncEnabled,deviceId,userPrincipalName,@odata.type';
+    const selectFields = 'id,displayName,userType,appId,mail,onPremisesSyncEnabled,deviceId,userPrincipalName,@odata.type';
 
-    const fetchPaged = async (initialUrl) => {
-      let results = [];
-      let url = initialUrl;
-      while (url) {
-        const data = await fetchJSON(url, { method: 'GET', headers });
-        if (data.value) results = results.concat(data.value);
-        url = data['@odata.nextLink'] || null;
-      }
-      return results;
-    };
+    const directUrl = `https://graph.microsoft.com/beta/groups/${groupId}/members?$select=${selectFields}&$top=999`;
+    const transitiveUrl = `https://graph.microsoft.com/beta/groups/${groupId}/transitiveMembers?$select=${selectFields}&$top=999`;
 
-    const directUrl = `https://graph.microsoft.com/beta/groups/${groupId}/members?$select=${baseSelect}&$top=999&$orderby=displayName%20asc&$count=true`;
-    const transitiveUrl = `https://graph.microsoft.com/beta/groups/${groupId}/transitiveMembers?$select=${baseSelect}&$top=999&$orderby=displayName%20asc&$count=true`;
-
-    const [directMembers, transitiveMembers] = await Promise.all([
-      fetchPaged(directUrl),
-      fetchPaged(transitiveUrl)
+    const [directRes, transitiveRes] = await Promise.all([
+      fetchJSON(directUrl, { method: 'GET', headers }),
+      fetchJSON(transitiveUrl, { method: 'GET', headers })
     ]);
 
-    const combined = [...directMembers, ...transitiveMembers];
+    const combined = [...(directRes.value || []), ...(transitiveRes.value || [])];
     const unique = [];
     const seen = new Set();
     combined.forEach(m => {
-      if (m['@odata.type'] === '#microsoft.graph.group') return; // skip nested groups
+      if (m['@odata.type'] === '#microsoft.graph.group') return;
       if (!seen.has(m.id)) {
         seen.add(m.id);
         unique.push(m);
