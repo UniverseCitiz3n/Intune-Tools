@@ -287,7 +287,7 @@ document.addEventListener("DOMContentLoaded", () => {
     } else if (state.currentDisplayType === 'compliance') {
       return `${rowData.policyName}-${rowData.targets[0].groupName}-${rowData.targets[0].targetType}`;
     } else if (state.currentDisplayType === 'pwsh') {
-      return `${rowData.scriptName}-${rowData.targetName}`;
+      return `${rowData.scriptName}-${rowData.targets[0].groupName}-${rowData.targets[0].targetType}`;
     }
     return '';
   };
@@ -477,30 +477,33 @@ document.addEventListener("DOMContentLoaded", () => {
     let rowIndex = (state.pagination.currentPage - 1) * state.pagination.itemsPerPage;
     
     assignments.forEach(script => {
-      // Generate unique row ID
-      const rowData = { scriptName: script.scriptName, targetName: script.targetName };
-      const rowId = generateRowId(rowData);
-      
-      // Check if this is a virtual assignment or dynamic group
-      const isVirtualAssignment = script.targetName === 'All Devices' || script.targetName === 'All Users';
-      const isDynamicGroupAssignment = script.targetGroupId && isDynamicGroup(script.targetGroupId);
-      const isDisabled = isVirtualAssignment || isDynamicGroupAssignment;
-      const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
+      script.targets.forEach(target => {
+        // Generate unique row ID
+        const rowData = { scriptName: script.scriptName, targets: [target] };
+        const rowId = generateRowId(rowData);
+        
+        // Check if this is a virtual assignment or dynamic group
+        const isVirtualAssignment = target.groupName === 'All Devices' || target.groupName === 'All Users';
+        const isDynamicGroupAssignment = target.groupId && isDynamicGroup(target.groupId);
+        const isDisabled = isVirtualAssignment || isDynamicGroupAssignment;
+        const disabledClass = isDisabled ? 'table-row-disabled' : 'table-row-selectable';
 
-      // Add tooltip for disabled rows
-      let tooltipText = '';
-      if (isVirtualAssignment) {
-        tooltipText = ' title="Virtual group"';
-      } else if (isDynamicGroupAssignment) {
-        tooltipText = ' title="Dynamic group – cannot modify manually"';
-      }
+        // Add tooltip for disabled rows
+        let tooltipText = '';
+        if (isVirtualAssignment) {
+          tooltipText = ' title="Virtual group"';
+        } else if (isDynamicGroupAssignment) {
+          tooltipText = ' title="Dynamic group – cannot modify manually"';
+        }
 
-      rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}" data-row-id="${rowId}"${tooltipText}>
-        <td style="word-wrap: break-word; white-space: normal;">${script.scriptName}</td>
-        <td style="word-wrap: break-word; white-space: normal;">${script.description || ''}</td>
-        <td style="word-wrap: break-word; white-space: normal;">${script.targetName}</td>
-      </tr>`;
-      rowIndex++;
+        rows += `<tr class="${disabledClass}" data-row-index="${rowIndex}" data-row-id="${rowId}"${tooltipText}>
+          <td style="word-wrap: break-word; white-space: normal;">${script.scriptName}</td>
+          <td style="word-wrap: break-word; white-space: normal;">${target.groupName}</td>
+          <td style="word-wrap: break-word; white-space: normal;">${target.membershipType}</td>
+          <td style="word-wrap: break-word; white-space: normal;">${target.targetType}</td>
+        </tr>`;
+        rowIndex++;
+      });
     });
 
     document.getElementById("configTableBody").innerHTML = rows;
@@ -521,9 +524,14 @@ document.addEventListener("DOMContentLoaded", () => {
     members.forEach(member => {
       const objectType = (member['@odata.type'] || '').split('.').pop();
       const upnOrId = member.userPrincipalName || member.deviceId || '';
+      const objectId = member.id || '';
+      
+      // For devices, show device ID in the UPN/Device ID column and object ID separately
+      // For users, show UPN in the UPN/Device ID column and object ID separately
       rows += `<tr data-row-index="${rowIndex}">
         <td style="word-wrap: break-word; white-space: normal;">${member.displayName || ''}</td>
         <td style="word-wrap: break-word; white-space: normal;">${upnOrId}</td>
+        <td style="word-wrap: break-word; white-space: normal;">${objectId}</td>
         <td style="word-wrap: break-word; white-space: normal;">${objectType}</td>
       </tr>`;
       rowIndex++;
@@ -545,7 +553,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!tabs || !tabs[0]) {
           const error = 'No active tab found.';
           logMessage(error);
-          showNotification(error, 'error');
+          showResultNotification(error, 'error');
           return reject(new Error(error));
         }
         const url = tabs[0].url;
@@ -555,7 +563,7 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!mdmMatch) {
           const error = 'mdmDeviceId not found in URL.';
           logMessage(error);
-          showNotification(error, 'error');
+          showResultNotification(error, 'error');
           return reject(new Error(error));
         }
         resolve({ mdmDeviceId: mdmMatch[1] });
@@ -572,7 +580,7 @@ document.addEventListener("DOMContentLoaded", () => {
         } else {
           const error = 'No token captured. Please login first.';
           logMessage(error);
-          showNotification(error, 'error');
+          showResultNotification(error, 'error');
           reject(new Error(error));
         }
       });
@@ -585,27 +593,61 @@ document.addEventListener("DOMContentLoaded", () => {
       "ConsistencyLevel": "eventual"
     };
 
-    // Separate endpoints for direct and transitive memberships
+    // Helper function to fetch all pages of results with pagination support
+    const fetchAllPages = async (baseUrl) => {
+      let allResults = [];
+      let url = baseUrl;
+      let pageCount = 0;
+      const maxPages = 50; // Safety limit to prevent infinite loops
+      
+      try {
+        while (url && pageCount < maxPages) {
+          pageCount++;
+          logMessage(`getAllGroupsMap: Fetching page ${pageCount} from ${url.substring(0, 100)}...`);
+          
+          const result = await fetchJSON(url, { method: "GET", headers });
+          if (result.value && Array.isArray(result.value)) {
+            allResults = allResults.concat(result.value);
+            logMessage(`getAllGroupsMap: Page ${pageCount} returned ${result.value.length} groups`);
+          }
+          
+          // Check for next page
+          url = result['@odata.nextLink'] || null;
+        }
+        
+        if (pageCount >= maxPages && url) {
+          logMessage(`getAllGroupsMap: Warning - reached maximum page limit (${maxPages}), some groups may be missing`);
+        }
+        
+        logMessage(`getAllGroupsMap: Fetched total of ${allResults.length} groups across ${pageCount} pages`);
+        return { value: allResults };
+      } catch (error) {
+        logMessage(`getAllGroupsMap: Error fetching from ${baseUrl}: ${error.message}`);
+        return { value: [] };
+      }
+    };
+
+    // Separate endpoints for direct and transitive memberships with pagination support
     const directEndpoints = [
-      `https://graph.microsoft.com/beta/devices/${deviceObjectId}/memberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`
+      `https://graph.microsoft.com/beta/devices/${deviceObjectId}/memberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$top=999&$count=true`
     ];
     
     const transitiveEndpoints = [
-      `https://graph.microsoft.com/beta/devices/${deviceObjectId}/transitiveMemberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`
+      `https://graph.microsoft.com/beta/devices/${deviceObjectId}/transitiveMemberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$top=999&$count=true`
     ];
 
     if (userObjectId) {
       directEndpoints.push(
-        `https://graph.microsoft.com/beta/users/${userObjectId}/memberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`
+        `https://graph.microsoft.com/beta/users/${userObjectId}/memberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$top=999&$count=true`
       );
       transitiveEndpoints.push(
-        `https://graph.microsoft.com/beta/users/${userObjectId}/transitiveMemberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$count=true`
+        `https://graph.microsoft.com/beta/users/${userObjectId}/transitiveMemberOf?$select=id,displayName,groupTypes&$orderBy=displayName%20asc&$top=999&$count=true`
       );
     }
 
     const [directResults, transitiveResults] = await Promise.all([
-      Promise.all(directEndpoints.map(url => fetchJSON(url, { method: "GET", headers }))),
-      Promise.all(transitiveEndpoints.map(url => fetchJSON(url, { method: "GET", headers })))
+      Promise.all(directEndpoints.map(url => fetchAllPages(url))),
+      Promise.all(transitiveEndpoints.map(url => fetchAllPages(url)))
     ]);
 
     const directGroupMap = new Map();
@@ -644,11 +686,123 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     });
 
+    logMessage(`getAllGroupsMap: Final results - Direct: ${directGroupMap.size}, Transitive: ${transitiveGroupMap.size}, Total: ${allGroupsMap.size} groups`);
+
     return {
       allGroups: allGroupsMap,
       directGroups: directGroupMap,
       transitiveGroups: transitiveGroupMap
     };
+  };
+
+  // resolveGroupInfo: Attempt to resolve group name and check membership for groups not in groupMaps
+  const resolveGroupInfo = async (groupId, deviceObjectId, userObjectId, token, groupMaps) => {
+    try {
+      logMessage(`resolveGroupInfo: Attempting to resolve group ${groupId}`);
+      
+      // First, try to get group basic info
+      const groupData = await fetchJSON(`https://graph.microsoft.com/beta/groups/${groupId}?$select=id,displayName,groupTypes`, {
+        method: "GET",
+        headers: { "Authorization": token, "Content-Type": "application/json" }
+      });
+      
+      if (!groupData || !groupData.displayName) {
+        logMessage(`resolveGroupInfo: Could not resolve group name for ${groupId}`);
+        return null;
+      }
+      
+      const groupName = groupData.displayName;
+      const isDynamic = groupData.groupTypes && groupData.groupTypes.includes('DynamicMembership');
+      
+      // Now check if the device or user is actually a member of this group
+      const membershipChecks = [];
+      
+      // Check device membership (both direct and transitive)
+      membershipChecks.push(
+        checkGroupMembership(groupId, deviceObjectId, 'device', token)
+      );
+      
+      // Check user membership if user exists
+      if (userObjectId) {
+        membershipChecks.push(
+          checkGroupMembership(groupId, userObjectId, 'user', token)
+        );
+      }
+      
+      const membershipResults = await Promise.all(membershipChecks);
+      const deviceMembership = membershipResults[0];
+      const userMembership = userObjectId ? membershipResults[1] : { isDirect: false, isTransitive: false };
+      
+      // If neither device nor user is a member, return null (maintain core logic)
+      if (!deviceMembership.isDirect && !deviceMembership.isTransitive && 
+          !userMembership.isDirect && !userMembership.isTransitive) {
+        logMessage(`resolveGroupInfo: Device/User is not a member of group ${groupName} (${groupId}), correctly filtering out`);
+        return null;
+      }
+      
+      // Determine membership type
+      let membershipType = 'Direct';
+      if ((deviceMembership.isDirect || userMembership.isDirect)) {
+        membershipType = 'Direct';
+        logMessage(`resolveGroupInfo: Found DIRECT membership for group ${groupName} (${groupId})`);
+      } else if ((deviceMembership.isTransitive || userMembership.isTransitive)) {
+        membershipType = 'Transitive';
+        logMessage(`resolveGroupInfo: Found TRANSITIVE membership for group ${groupName} (${groupId})`);
+      }
+      
+      // Update groupMaps for future use
+      groupMaps.allGroups.set(groupId, groupName);
+      if (membershipType === 'Direct') {
+        groupMaps.directGroups.set(groupId, groupName);
+      } else {
+        groupMaps.transitiveGroups.set(groupId, groupName);
+      }
+      
+      // Track dynamic groups
+      if (isDynamic) {
+        addDynamicGroup(groupId);
+      }
+      
+      logMessage(`resolveGroupInfo: Successfully resolved missing group ${groupName} (${groupId}) with ${membershipType} membership`);
+      return { groupName, membershipType, isDynamic };
+      
+    } catch (error) {
+      logMessage(`resolveGroupInfo: Error resolving group ${groupId}: ${error.message}`);
+      return null;
+    }
+  };
+
+  // checkGroupMembership: Check if an object is a member of a specific group
+  const checkGroupMembership = async (groupId, objectId, objectType, token) => {
+    const headers = {
+      "Authorization": token,
+      "Content-Type": "application/json",
+      "ConsistencyLevel": "eventual"
+    };
+    
+    try {
+      const baseUrl = objectType === 'device' 
+        ? `https://graph.microsoft.com/beta/devices/${objectId}`
+        : `https://graph.microsoft.com/beta/users/${objectId}`;
+      
+      // Check direct membership
+      const directUrl = `${baseUrl}/memberOf?$filter=id eq '${groupId}'&$select=id`;
+      const directResult = await fetchJSON(directUrl, { method: "GET", headers });
+      const isDirect = directResult.value && directResult.value.length > 0;
+      
+      // Check transitive membership if not direct
+      let isTransitive = false;
+      if (!isDirect) {
+        const transitiveUrl = `${baseUrl}/transitiveMemberOf?$filter=id eq '${groupId}'&$select=id`;
+        const transitiveResult = await fetchJSON(transitiveUrl, { method: "GET", headers });
+        isTransitive = transitiveResult.value && transitiveResult.value.length > 0;
+      }
+      
+      return { isDirect, isTransitive };
+    } catch (error) {
+      logMessage(`checkGroupMembership: Error checking membership for ${objectType} ${objectId} in group ${groupId}: ${error.message}`);
+      return { isDirect: false, isTransitive: false };
+    }
   };
 
   // getDirectoryObjectId: Get directory object ID for device or user based on current mode
@@ -731,13 +885,27 @@ document.addEventListener("DOMContentLoaded", () => {
   const updateActionButtonsState = () => {
     const selected = document.querySelectorAll('#groupResults input[type=checkbox]:checked');
     const hasDynamic = Array.from(selected).some(cb => isDynamicGroup(cb.value));
+    
+    // Collect the names of dynamic groups that are selected
+    const dynamicGroupNames = Array.from(selected)
+      .filter(cb => isDynamicGroup(cb.value))
+      .map(cb => cb.dataset.groupName)
+      .filter(name => name); // Remove any undefined names
+    
     ['addToGroups', 'removeFromGroups'].forEach(id => {
       const btn = document.getElementById(id);
       if (!btn) return;
       if (hasDynamic) {
         btn.classList.add('disabled');
+        // Add tooltip showing which dynamic groups are causing the disablement
+        const tooltipText = dynamicGroupNames.length > 0 
+          ? `Cannot modify dynamic group${dynamicGroupNames.length > 1 ? 's' : ''}: ${dynamicGroupNames.join(', ')}`
+          : 'Cannot modify dynamic groups';
+        btn.title = tooltipText;
       } else {
         btn.classList.remove('disabled');
+        // Remove tooltip when buttons are enabled
+        btn.removeAttribute('title');
       }
     });
   };
@@ -749,7 +917,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       // Determine which column contains the group name based on current table type
       if (state.currentDisplayType === 'pwsh') {
-        groupNameCell = row.children[2]; // Assignment Target is the 3rd column (index 2) for PowerShell scripts
+        groupNameCell = row.children[1]; // Group is the 2nd column (index 1) for PowerShell scripts
       } else {
         groupNameCell = row.children[1]; // Group Name is the 2nd column (index 1) for other tables after removing checkbox column
       }
@@ -870,20 +1038,24 @@ document.addEventListener("DOMContentLoaded", () => {
     } else if (type === 'pwsh') {
       headerContent = `
         <th class="sortable" style="word-wrap: break-word; white-space: normal;">Script Name</th>
-        <th style="word-wrap: break-word; white-space: normal;">Description</th>
-        <th style="word-wrap: break-word; white-space: normal;">Assignment Target</th>      `;
+        <th style="word-wrap: break-word; white-space: normal;">Group</th>
+        <th style="word-wrap: break-word; white-space: normal;">Membership Type</th>
+        <th style="word-wrap: break-word; white-space: normal;">Target Type</th>
+      `;
     } else if (type === 'groupMembers') {
       headerContent = `
         <th class="sortable" style="word-wrap: break-word; white-space: normal;">Display Name</th>
         <th style="word-wrap: break-word; white-space: normal;">UPN / Device ID</th>
+        <th style="word-wrap: break-word; white-space: normal;">Object ID</th>
         <th style="word-wrap: break-word; white-space: normal;">Object Type</th>
       `;
     }
     headerRow.innerHTML = headerContent;
     const sortableHeader = document.querySelector('th.sortable');
     if (sortableHeader) {
-      sortableHeader.classList.remove('desc');
-      sortableHeader.classList.add('asc');
+      // Apply current sort direction to the header
+      sortableHeader.classList.remove('desc', 'asc');
+      sortableHeader.classList.add(state.sortDirection);
     }
   };  // updateConfigTable: Update configuration assignments table
   const updateConfigTable = (assignments, updateDisplay = true) => {
@@ -916,8 +1088,10 @@ document.addEventListener("DOMContentLoaded", () => {
     updatePaginationControls();
 
     const sortableHeader = document.querySelector('th.sortable');
-    sortableHeader.classList.remove('desc');
-    sortableHeader.classList.add('asc');
+    if (sortableHeader) {
+      sortableHeader.classList.remove('desc', 'asc');
+      sortableHeader.classList.add(state.sortDirection);
+    }
   };
 
   const updateGroupMembersTable = (members, updateDisplay = true) => {
@@ -934,6 +1108,7 @@ document.addEventListener("DOMContentLoaded", () => {
       displayName: m.displayName || '',
       userPrincipalName: m.userPrincipalName || '',
       deviceId: m.deviceId || '',
+      id: m.id || '', // Include object ID
       ['@odata.type']: m['@odata.type'] || ''
     }));
 
@@ -944,8 +1119,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const sortableHeader = document.querySelector('th.sortable');
     if (sortableHeader) {
-      sortableHeader.classList.remove('desc');
-      sortableHeader.classList.add('asc');
+      sortableHeader.classList.remove('desc', 'asc');
+      sortableHeader.classList.add(state.sortDirection);
     }
   };
   // updateAppTable: Update app assignments table (similar in structure)
@@ -982,8 +1157,10 @@ document.addEventListener("DOMContentLoaded", () => {
     updatePaginationControls();
 
     const sortableHeader = document.querySelector('th.sortable');
-    sortableHeader.classList.remove('desc');
-    sortableHeader.classList.add('asc');
+    if (sortableHeader) {
+      sortableHeader.classList.remove('desc', 'asc');
+      sortableHeader.classList.add(state.sortDirection);
+    }
   };
   // updateComplianceTable: Update compliance assignments table
   const updateComplianceTable = (assignments, updateDisplay = true) => {
@@ -1017,8 +1194,10 @@ document.addEventListener("DOMContentLoaded", () => {
     updatePaginationControls();
 
     const sortableHeader = document.querySelector('th.sortable');
-    sortableHeader.classList.remove('desc');
-    sortableHeader.classList.add('asc');
+    if (sortableHeader) {
+      sortableHeader.classList.remove('desc', 'asc');
+      sortableHeader.classList.add(state.sortDirection);
+    }
   };
   // updatePwshTable: Update PowerShell scripts table
   const updatePwshTable = (assignments, updateDisplay = true) => {
@@ -1031,12 +1210,46 @@ document.addEventListener("DOMContentLoaded", () => {
     assignments.sort((a, b) => a.scriptName.localeCompare(b.scriptName));
     if (state.sortDirection === 'desc') assignments.reverse();
 
-    // For PowerShell scripts, each script is a single row (no targets to flatten)
-    const flattenedData = assignments.map(script => ({
-      scriptName: script.scriptName,
-      description: script.description || '',
-      targetName: script.targetName
-    }));
+    // Transform flattened data into grouped structure like config/compliance assignments
+    const scriptMap = new Map();
+    assignments.forEach(item => {
+      if (!scriptMap.has(item.scriptName)) {
+        scriptMap.set(item.scriptName, {
+          scriptName: item.scriptName,
+          description: item.description || '',
+          targets: []
+        });
+      }
+      
+      // Use the stored target type and determine membership type
+      let targetType = item.targetType || 'Device'; // Default to Device if not specified
+      let membershipType = 'Assigned';
+      
+      if (item.targetName === 'All Devices' || item.targetName === 'All Users') {
+        membershipType = 'Direct';
+      }
+      
+      scriptMap.get(item.scriptName).targets.push({
+        groupName: item.targetName,
+        groupId: item.targetGroupId,
+        targetType: targetType,
+        membershipType: membershipType
+      });
+    });
+
+    const groupedAssignments = Array.from(scriptMap.values());
+
+    // Flatten assignments for pagination (each target becomes a row)
+    const flattenedData = [];
+    groupedAssignments.forEach(script => {
+      script.targets.forEach(target => {
+        flattenedData.push({
+          scriptName: script.scriptName,
+          description: script.description,
+          targets: [target] // Keep single target for rendering
+        });
+      });
+    });
 
     // Update pagination state
     const filterValue = document.getElementById('profileFilterInput').value.toLowerCase();
@@ -1047,8 +1260,10 @@ document.addEventListener("DOMContentLoaded", () => {
     updatePaginationControls();
 
     const sortableHeader = document.querySelector('th.sortable');
-    sortableHeader.classList.remove('desc');
-    sortableHeader.classList.add('asc');
+    if (sortableHeader) {
+      sortableHeader.classList.remove('desc', 'asc');
+      sortableHeader.classList.add(state.sortDirection);
+    }
   };
   // ── State Restoration Functions ─────────────────────────────────────────
   const restoreFilterValue = () => {
@@ -1150,10 +1365,12 @@ document.addEventListener("DOMContentLoaded", () => {
     const query = document.getElementById("groupSearchInput").value.trim();
     if (!query) {
       logMessage("searchGroup: No query entered");
-      showNotification("Enter group name to search.", "info");
+      showResultNotification("Enter group name to search.", "info");
       return;
     }
     try {
+      showProcessingNotification(`Searching for groups containing "${query}"...`);
+      
       const token = await getToken();
       logMessage("searchGroup: Token found, proceeding with fetch");
 
@@ -1174,6 +1391,7 @@ document.addEventListener("DOMContentLoaded", () => {
       if (!groupsData.value || groupsData.value.length === 0) {
         logMessage("searchGroup: No groups found");
         resultsDiv.textContent = "No groups found.";
+        showResultNotification(`No groups found matching "${query}".`, "info");
         return;
       }
 
@@ -1222,9 +1440,10 @@ document.addEventListener("DOMContentLoaded", () => {
       updateActionButtonsState();
 
       chrome.storage.local.set({ lastSearchResults: searchResults, lastSearchQuery: query });
+      showResultNotification(`Found ${searchResults.length} group(s) matching "${query}".`, "success");
     } catch (error) {
       logMessage(`searchGroup: Error - ${error.message}`);
-      showNotification('Error: ' + error.message, 'error');
+      showResultNotification('Error: ' + error.message, 'error');
     }
   };
 
@@ -1234,7 +1453,7 @@ document.addEventListener("DOMContentLoaded", () => {
     logMessage(`addToGroups clicked (${targetType} mode)`);
 
     if (document.getElementById('addToGroups').classList.contains('disabled')) {
-      showNotification('Cannot modify dynamic groups.', 'error');
+      showResultNotification('Cannot modify dynamic groups.', 'error');
       return;
     }
 
@@ -1245,9 +1464,9 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // Show notification with count
+    // Show processing notification with count
     const totalCount = allSelected.searchResults.length + allSelected.tableSelections.length;
-    showNotification(`Adding ${targetType} to ${totalCount} group(s)...`, 'info');
+    showProcessingNotification(`Adding ${targetType} to ${totalCount} group(s)...`);
 
     try {
       const { mdmDeviceId } = await verifyMdmUrl();
@@ -1299,10 +1518,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const successMsg = `Successfully added ${targetType} "${displayName}" to groups`;
       const errorMsg = `Some groups could not be added for ${targetType} "${displayName}"\n${message}`;
-      showNotification(success ? successMsg : errorMsg, success ? 'success' : 'error');
+      showResultNotification(success ? successMsg : errorMsg, success ? 'success' : 'error');
     } catch (error) {
       logMessage(`addToGroups: Error - ${error.message}`);
-      showNotification(`Failed to add ${targetType} to groups: ${error.message}`, 'error');
+      showResultNotification(`Failed to add ${targetType} to groups: ${error.message}`, 'error');
     }
   };
 
@@ -1329,7 +1548,7 @@ document.addEventListener("DOMContentLoaded", () => {
     logMessage(`removeFromGroups clicked (${targetType} mode)`);
 
     if (document.getElementById('removeFromGroups').classList.contains('disabled')) {
-      showNotification('Cannot modify dynamic groups.', 'error');
+      showResultNotification('Cannot modify dynamic groups.', 'error');
       return;
     }
 
@@ -1340,9 +1559,9 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    // Show notification with count
+    // Show processing notification with count
     const totalCount = allSelected.searchResults.length + allSelected.tableSelections.length;
-    showNotification(`Removing ${targetType} from ${totalCount} group(s)...`, 'info');
+    showProcessingNotification(`Removing ${targetType} from ${totalCount} group(s)...`);
 
     try {
       const { mdmDeviceId } = await verifyMdmUrl();
@@ -1394,10 +1613,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const successMsg = `Successfully removed ${targetType} "${displayName}" from groups`;
       const errorMsg = `Some groups could not be removed for ${targetType} "${displayName}"\n${message}`;
-      showNotification(success ? successMsg : errorMsg, success ? 'success' : 'error');
+      showResultNotification(success ? successMsg : errorMsg, success ? 'success' : 'error');
     } catch (error) {
       logMessage(`removeFromGroups: Error - ${error.message}`);
-      showNotification(`Failed to remove ${targetType} from groups: ${error.message}`, 'error');
+      showResultNotification(`Failed to remove ${targetType} from groups: ${error.message}`, 'error');
     }
   };
 
@@ -1531,7 +1750,7 @@ document.addEventListener("DOMContentLoaded", () => {
     
     // Try 1: Basic request without advanced query parameters
     try {
-      const basicUrl = `https://graph.microsoft.com/beta/groups/${groupId}/members`;
+      const basicUrl = `https://graph.microsoft.com/beta/groups/${groupId}/members?$select=${selectFields}`;
       const basicHeaders = {
         "Authorization": token,
         "Content-Type": "application/json"
@@ -1562,7 +1781,7 @@ document.addEventListener("DOMContentLoaded", () => {
     
     // Try 2: Check if it's a security group with different approach
     try {
-      const expandUrl = `https://graph.microsoft.com/beta/groups/${groupId}?$expand=members`;
+      const expandUrl = `https://graph.microsoft.com/beta/groups/${groupId}?$expand=members($select=${selectFields})`;
       const expandHeaders = {
         "Authorization": token,
         "Content-Type": "application/json"
@@ -1612,7 +1831,7 @@ document.addEventListener("DOMContentLoaded", () => {
     logMessage("checkGroupMembers clicked");
     const selected = document.querySelectorAll("#groupResults input[type=checkbox]:checked");
     if (selected.length !== 1) {
-      showNotification('Select exactly one group.', 'error');
+      showResultNotification('Select exactly one group.', 'error');
       return;
     }
 
@@ -1630,7 +1849,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const token = await getToken();
       logMessage("checkGroupMembers: Token retrieved successfully");
 
-      showNotification(`Fetching members for group "${groupName}"...`, 'info');
+      showProcessingNotification(`Fetching members for group "${groupName}"...`);
 
       const { members, totalCount, note } = await fetchAllGroupMembers(groupId, token);
 
@@ -1651,12 +1870,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (totalCount === 0) {
         if (note) {
-          showNotification(`Group "${groupName}" loaded. ${note}`, 'info');
+          showResultNotification(`Group "${groupName}" loaded. ${note}`, 'info');
         } else {
-          showNotification(`Group "${groupName}" has no members or you don't have permission to view them.`, 'warning');
+          showResultNotification(`Group "${groupName}" has no members or you don't have permission to view them.`, 'warning');
         }
       } else {
-        showNotification(`Successfully loaded ${totalCount} members for group "${groupName}".`, 'success');
+        showResultNotification(`Successfully loaded ${totalCount} members for group "${groupName}".`, 'success');
       }
       
     } catch (error) {
@@ -1673,14 +1892,14 @@ document.addEventListener("DOMContentLoaded", () => {
         errorMessage = 'Authentication failed. Please refresh the page and try again.';
       }
       
-      showNotification(errorMessage, 'error');
+      showResultNotification(errorMessage, 'error');
     }
   };
 
   // Handle Checking Configuration Assignments
   const handleCheckGroups = async () => {
     logMessage("checkGroups clicked");
-    showNotification('Fetching configuration assignments...', 'info');
+    showProcessingNotification('Fetching configuration assignments...');
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
 
@@ -1737,7 +1956,7 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       const policies = reportData.Values || [];
       if (policies.length === 0) {
-        showNotification('No policies found.', 'info');
+        showResultNotification('No policies found.', 'info');
         clearTableAndPagination();
         return;
       }
@@ -1759,32 +1978,54 @@ document.addEventListener("DOMContentLoaded", () => {
           });
           let targetObjs = [];
           const assignments = Array.isArray(assignData.value) ? assignData.value : (assignData.value ? [assignData.value] : []);
-          assignments.forEach(asg => {
-            if (!asg.target) return;
+          // Process assignments sequentially to ensure proper group resolution
+          for (const asg of assignments) {
+            if (!asg.target) continue;
             const typeRaw = (asg.target['@odata.type'] || "").toLowerCase().trim();
             if (typeRaw.includes("groupassignmenttarget")) {
               const groupId = asg.target.groupId;
+              let groupName, membershipType;
+              
               if (groupMaps.allGroups.has(groupId)) {
+                // Group found in initial mapping
+                groupName = groupMaps.allGroups.get(groupId);
+                
                 // Determine membership type based on direct vs transitive membership
-                let membershipType = 'Direct';
                 const isDirectMember = groupMaps.directGroups.has(groupId);
                 const isTransitiveMember = groupMaps.transitiveGroups.has(groupId);
                 
                 if (!isDirectMember && isTransitiveMember) {
                   membershipType = 'Transitive';
-                  logMessage(`checkGroups: Group ${groupMaps.allGroups.get(groupId)} (${groupId}) - Transitive membership detected`);
+                  logMessage(`checkGroups: Group ${groupName} (${groupId}) - Transitive membership detected`);
                 } else if (isDirectMember) {
-                  logMessage(`checkGroups: Group ${groupMaps.allGroups.get(groupId)} (${groupId}) - Direct membership detected`);
+                  membershipType = 'Direct';
+                  logMessage(`checkGroups: Group ${groupName} (${groupId}) - Direct membership detected`);
+                } else {
+                  membershipType = 'Direct'; // Default fallback
                 }
+              } else {
+                // Group not found in initial mapping - try to resolve it
+                logMessage(`checkGroups: Group ${groupId} not found in groupMaps, attempting to resolve...`);
+                const resolvedGroup = await resolveGroupInfo(groupId, deviceObjectId, userObjectId, token, groupMaps);
                 
-                targetObjs.push({
-                  groupId: groupId,
-                  groupName: groupMaps.allGroups.get(groupId),
-                  membershipType: membershipType,
-                  targetType: typeRaw.includes('user') ? 'User' : 'Device',
-                  intent: "Included"
-                });
+                if (resolvedGroup) {
+                  groupName = resolvedGroup.groupName;
+                  membershipType = resolvedGroup.membershipType;
+                  logMessage(`checkGroups: Successfully resolved missing group ${groupName} (${groupId})`);
+                } else {
+                  // Group exists in assignment but device/user is not a member - correctly filter out
+                  logMessage(`checkGroups: Group ${groupId} assignment filtered out (device/user not a member)`);
+                  continue;
+                }
               }
+              
+              targetObjs.push({
+                groupId: groupId,
+                groupName: groupName,
+                membershipType: membershipType,
+                targetType: typeRaw.includes('user') ? 'User' : 'Device',
+                intent: "Included"
+              });
             } else if (typeRaw.includes("alldevicesassignmenttarget")) {
               targetObjs.push({
                 groupName: "All Devices",
@@ -1802,7 +2043,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 });
               }
             }
-          });
+          }
           return { policyName: policy.PolicyName, targets: targetObjs };
         } catch (err) {
           logMessage(`checkGroups: Error processing policy ${policy.PolicyName} - ${err.message}`);
@@ -1813,16 +2054,16 @@ document.addEventListener("DOMContentLoaded", () => {
       chrome.storage.local.set({ lastConfigAssignments: finalResults });
       updateConfigTable(finalResults);
       logMessage(`checkGroups: Found ${finalResults.length} policies with valid group assignments`);
-      showNotification('Configuration assignments loaded successfully', 'success');
+      showResultNotification('Configuration assignments loaded successfully', 'success');
     } catch (error) {
       logMessage(`checkGroups: Error - ${error.message}`);
-      showNotification('Failed to load configuration assignments: ' + error.message, 'error');
+      showResultNotification('Failed to load configuration assignments: ' + error.message, 'error');
     }
   };
   // Handle Checking Compliance Policies
   const handleCheckCompliance = async () => {
     logMessage("checkCompliance clicked");
-    showNotification('Fetching compliance policies...', 'info');
+    showProcessingNotification('Fetching compliance policies...');
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
 
@@ -1863,6 +2104,21 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       const userObjectId = await userPromise;
       const groupMaps = await getAllGroupsMap(deviceObjectId, userObjectId, token);
+      
+      // Try a comprehensive approach: fetch all compliance policies from tenant and match them to device/user groups
+      logMessage("checkCompliance: Fetching all compliance policies from tenant to cross-reference with device report");
+      let tenantCompliancePolicies = [];
+      try {
+        const allPoliciesData = await fetchJSON("https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies?$expand=assignments", {
+          method: "GET",
+          headers: { "Authorization": token, "Content-Type": "application/json" }
+        });
+        tenantCompliancePolicies = allPoliciesData.value || [];
+        logMessage(`checkCompliance: Found ${tenantCompliancePolicies.length} compliance policies in tenant`);
+      } catch (tenantErr) {
+        logMessage(`checkCompliance: Failed to fetch tenant compliance policies: ${tenantErr.message}`);
+      }
+      
       const reportBody = JSON.stringify({
         filter: `(DeviceId eq '${mdmDeviceId}') and ((PolicyPlatformType eq '4') or (PolicyPlatformType eq '5') or (PolicyPlatformType eq '6') or (PolicyPlatformType eq '8') or (PolicyPlatformType eq '100'))`,
         orderBy: ["PolicyName asc"]
@@ -1874,7 +2130,7 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       if (!reportData || !reportData.Schema || !reportData.Values) {
         logMessage("checkCompliance: Invalid response format");
-        showNotification('Invalid response format from compliance report API.', 'error');
+        showResultNotification('Invalid response format from compliance report API.', 'error');
         return;
       }
       const schemaMap = {};
@@ -1883,13 +2139,13 @@ document.addEventListener("DOMContentLoaded", () => {
       const missingColumns = requiredColumns.filter(col => schemaMap[col] === undefined);
       if (missingColumns.length > 0) {
         logMessage(`checkCompliance: Missing required columns: ${missingColumns.join(', ')}`);
-        showNotification(`API response missing required columns: ${missingColumns.join(', ')}`, 'error');
+        showResultNotification(`API response missing required columns: ${missingColumns.join(', ')}`, 'error');
         return;
       }
       const policies = reportData.Values || [];
       if (policies.length === 0) {
         logMessage("checkCompliance: No compliance policies found");
-        showNotification('No compliance policies found.', 'info');
+        showResultNotification('No compliance policies found.', 'info');
         clearTableAndPagination();
         return;
       }
@@ -1898,48 +2154,105 @@ document.addEventListener("DOMContentLoaded", () => {
         policyName: policy[schemaMap.PolicyName] || 'Unknown Policy',
         complianceState: policy[schemaMap.PolicyStatus_loc] || 'Unknown'
       }));
+      
+      logMessage(`checkCompliance: Found ${formattedPolicies.length} policies from device report`);
+      formattedPolicies.forEach((policy, index) => {
+        logMessage(`checkCompliance: Policy ${index + 1}: "${policy.policyName}" (ID: ${policy.policyId}) - State: ${policy.complianceState}`);
+      });
+      
       const assignmentPromises = formattedPolicies.map(async (policy) => {
         if (!policy.policyId || policy.policyId === 'Unknown') {
+          logMessage(`checkCompliance: Skipping policy "${policy.policyName}" - no valid policy ID`);
           return { ...policy, assignments: [] };
         }
         try {
+          logMessage(`checkCompliance: Fetching assignments for policy "${policy.policyName}" (${policy.policyId})`);
           const policyData = await fetchJSON(`https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies/${policy.policyId}?$expand=assignments`, {
             method: "GET",
             headers: { "Authorization": token, "Content-Type": "application/json" }
           });
+          
+          const assignmentCount = policyData.assignments ? policyData.assignments.length : 0;
+          logMessage(`checkCompliance: Policy "${policy.policyName}" has ${assignmentCount} assignments`);
+          
           return { ...policy, assignments: policyData.assignments || [] };
         } catch (err) {
           logMessage(`checkCompliance: Error getting assignments for policy ${policy.policyId}: ${err.message}`);
+          
+          // If it's a 404 error, try alternative endpoints for different compliance policy types
+          if (err.message.includes('404') || err.message.includes('Not Found')) {
+            logMessage(`checkCompliance: Policy "${policy.policyName}" (${policy.policyId}) not found in deviceCompliancePolicies endpoint - trying alternative approaches`);
+            
+            // Try different compliance policy endpoints
+            const alternativeEndpoints = [
+              `https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies('${policy.policyId}')?$expand=assignments`,
+              `https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations('${policy.policyId}')?$expand=assignments`,
+              `https://graph.microsoft.com/beta/deviceManagement/configurationPolicies('${policy.policyId}')?$expand=assignments`
+            ];
+            
+            for (const endpoint of alternativeEndpoints) {
+              try {
+                logMessage(`checkCompliance: Trying alternative endpoint for policy "${policy.policyName}": ${endpoint.substring(0, 100)}...`);
+                const altPolicyData = await fetchJSON(endpoint, {
+                  method: "GET",
+                  headers: { "Authorization": token, "Content-Type": "application/json" }
+                });
+                
+                if (altPolicyData && altPolicyData.assignments) {
+                  const assignmentCount = altPolicyData.assignments.length;
+                  logMessage(`checkCompliance: Found ${assignmentCount} assignments for policy "${policy.policyName}" using alternative endpoint`);
+                  return { ...policy, assignments: altPolicyData.assignments || [] };
+                }
+              } catch (altErr) {
+                logMessage(`checkCompliance: Alternative endpoint failed for policy "${policy.policyName}": ${altErr.message}`);
+                continue;
+              }
+            }
+            
+            logMessage(`checkCompliance: All endpoints failed for policy "${policy.policyName}" - might be a built-in/system policy`);
+          }
+          
           return { ...policy, assignments: [] };
         }
       });
       const policiesWithAssignments = await Promise.all(assignmentPromises);
       if (!policiesWithAssignments || policiesWithAssignments.length === 0) {
         clearTableAndPagination();
-        showNotification('No compliance policies found.', 'info');
+        showResultNotification('No compliance policies found.', 'info');
         return;
       }
-      const tableData = policiesWithAssignments.map(policy => {
+      
+      // Process assignments with improved group resolution
+      const tableData = await Promise.all(policiesWithAssignments.map(async (policy) => {
+        logMessage(`checkCompliance: Processing assignments for policy "${policy.policyName}" with ${policy.assignments ? policy.assignments.length : 0} assignments`);
         let targets = [];
         if (policy.assignments && policy.assignments.length > 0) {
-          policy.assignments.forEach(asg => {
-            if (!asg.target) return;
+          // Process assignments sequentially to avoid overwhelming the API
+          for (const asg of policy.assignments) {
+            if (!asg.target) {
+              logMessage(`checkCompliance: Policy "${policy.policyName}" - skipping assignment with no target`);
+              continue;
+            }
             const targetType = (asg.target['@odata.type'] || '').toLowerCase();
+            logMessage(`checkCompliance: Policy "${policy.policyName}" - processing assignment with target type: ${targetType}`);
+            
             const isExclusion = targetType.includes('exclusion');
-            if (isExclusion) return; // Skip exclusions
+            if (isExclusion) {
+              logMessage(`checkCompliance: Policy "${policy.policyName}" - skipping exclusion assignment`);
+              continue; // Skip exclusions
+            }
 
             if (targetType.includes('groupassignmenttarget')) {
               const groupId = asg.target.groupId;
-              const groupName = groupMaps.allGroups.has(groupId)
-                ? groupMaps.allGroups.get(groupId)
-                : `Group ID: ${groupId.substring(0, 8)}...`;
-
-              // Skip unresolved group IDs
-              if (groupName.startsWith('Group ID:')) return;
-
-              // Determine membership type based on direct vs transitive membership
-              let membershipType = isExclusion ? 'Exclude' : 'Direct';
-              if (!isExclusion) {
+              logMessage(`checkCompliance: Policy "${policy.policyName}" - processing group assignment for group ${groupId}`);
+              let groupName, membershipType;
+              
+              if (groupMaps.allGroups.has(groupId)) {
+                // Group found in initial mapping
+                groupName = groupMaps.allGroups.get(groupId);
+                logMessage(`checkCompliance: Policy "${policy.policyName}" - group ${groupName} (${groupId}) found in groupMaps`);
+                
+                // Determine membership type based on direct vs transitive membership
                 const isDirectMember = groupMaps.directGroups.has(groupId);
                 const isTransitiveMember = groupMaps.transitiveGroups.has(groupId);
                 
@@ -1947,7 +2260,114 @@ document.addEventListener("DOMContentLoaded", () => {
                   membershipType = 'Transitive';
                   logMessage(`checkCompliance: Group ${groupName} (${groupId}) - Transitive membership detected`);
                 } else if (isDirectMember) {
+                  membershipType = 'Direct';
                   logMessage(`checkCompliance: Group ${groupName} (${groupId}) - Direct membership detected`);
+                } else {
+                  membershipType = 'Direct'; // Default fallback
+                  logMessage(`checkCompliance: Group ${groupName} (${groupId}) - using Direct as fallback`);
+                }
+              } else {
+                // Group not found in initial mapping - try to resolve it
+                logMessage(`checkCompliance: Group ${groupId} not found in groupMaps, attempting to resolve...`);
+                const resolvedGroup = await resolveGroupInfo(groupId, deviceObjectId, userObjectId, token, groupMaps);
+                
+                if (resolvedGroup) {
+                  groupName = resolvedGroup.groupName;
+                  membershipType = resolvedGroup.membershipType;
+                  logMessage(`checkCompliance: Successfully resolved missing group ${groupName} (${groupId})`);
+                } else {
+                  // Group exists in assignment but device/user is not a member - correctly filter out
+                  logMessage(`checkCompliance: Group ${groupId} assignment filtered out (device/user not a member)`);
+                  continue;
+                }
+              }
+
+              const targetInfo = {
+                groupName,
+                membershipType: membershipType,
+                targetType: targetType.includes('user') ? 'User' : 'Device'
+              };
+              targets.push(targetInfo);
+              logMessage(`checkCompliance: Policy "${policy.policyName}" - added target: ${JSON.stringify(targetInfo)}`);
+            } else if (targetType.includes('alldevicesassignmenttarget')) {
+              const targetInfo = {
+                groupName: 'All Devices',
+                membershipType: 'Virtual',
+                targetType: 'Device'
+              };
+              targets.push(targetInfo);
+              logMessage(`checkCompliance: Policy "${policy.policyName}" - added All Devices target: ${JSON.stringify(targetInfo)}`);
+            } else if (targetType.includes('allusersassignmenttarget') || targetType.includes('alllicensedusersassignmenttarget')) {
+              const targetInfo = {
+                groupName: 'All Users',
+                membershipType: 'Virtual',
+                targetType: 'User'
+              };
+              targets.push(targetInfo);
+              logMessage(`checkCompliance: Policy "${policy.policyName}" - added All Users target: ${JSON.stringify(targetInfo)}`);
+            } else {
+              logMessage(`checkCompliance: Policy "${policy.policyName}" - unknown target type: ${targetType}`);
+            }
+          }
+        }
+        
+        logMessage(`checkCompliance: Policy "${policy.policyName}" - final targets count: ${targets.length}`);
+        if (targets.length === 0) {
+          targets.push({ groupName: 'No Assignments', membershipType: '-', targetType: '-' });
+          logMessage(`checkCompliance: Policy "${policy.policyName}" - added No Assignments fallback`);
+        }
+        return { policyName: policy.policyName, complianceState: policy.complianceState, targets };
+      }));
+      
+      // Cross-reference with tenant compliance policies to find any missing assignments
+      logMessage("checkCompliance: Cross-referencing with tenant policies for additional assignments");
+      const additionalPolicies = [];
+      
+      for (const tenantPolicy of tenantCompliancePolicies) {
+        // Check if this tenant policy is already in our results
+        const alreadyIncluded = tableData.some(reportPolicy => 
+          reportPolicy.policyName === tenantPolicy.displayName || 
+          reportPolicy.policyName === tenantPolicy.name ||
+          (reportPolicy.targets && reportPolicy.targets.length > 0 && reportPolicy.targets[0].groupName !== 'No Assignments')
+        );
+        
+        if (alreadyIncluded) {
+          continue;
+        }
+        
+        // Check if this tenant policy is assigned to any groups the device/user is a member of
+        if (tenantPolicy.assignments && tenantPolicy.assignments.length > 0) {
+          const targets = [];
+          
+          for (const asg of tenantPolicy.assignments) {
+            if (!asg.target) continue;
+            const targetType = (asg.target['@odata.type'] || '').toLowerCase();
+            const isExclusion = targetType.includes('exclusion');
+            if (isExclusion) continue;
+
+            if (targetType.includes('groupassignmenttarget')) {
+              const groupId = asg.target.groupId;
+              let groupName, membershipType;
+              
+              if (groupMaps.allGroups.has(groupId)) {
+                groupName = groupMaps.allGroups.get(groupId);
+                const isDirectMember = groupMaps.directGroups.has(groupId);
+                const isTransitiveMember = groupMaps.transitiveGroups.has(groupId);
+                
+                if (!isDirectMember && isTransitiveMember) {
+                  membershipType = 'Transitive';
+                } else if (isDirectMember) {
+                  membershipType = 'Direct';
+                } else {
+                  membershipType = 'Direct';
+                }
+              } else {
+                const resolvedGroup = await resolveGroupInfo(groupId, deviceObjectId, userObjectId, token, groupMaps);
+                if (resolvedGroup) {
+                  groupName = resolvedGroup.groupName;
+                  membershipType = resolvedGroup.membershipType;
+                } else {
+                  continue;
                 }
               }
 
@@ -1959,30 +2379,40 @@ document.addEventListener("DOMContentLoaded", () => {
             } else if (targetType.includes('alldevicesassignmenttarget')) {
               targets.push({
                 groupName: 'All Devices',
-                membershipType: isExclusion ? 'Exclude' : 'Virtual',
+                membershipType: 'Virtual',
                 targetType: 'Device'
               });
             } else if (targetType.includes('allusersassignmenttarget')) {
               targets.push({
                 groupName: 'All Users',
-                membershipType: isExclusion ? 'Exclude' : 'Virtual',
+                membershipType: 'Virtual',
                 targetType: 'User'
               });
             }
-          });
+          }
+          
+          if (targets.length > 0) {
+            logMessage(`checkCompliance: Found additional tenant policy "${tenantPolicy.displayName}" with ${targets.length} applicable assignments`);
+            additionalPolicies.push({
+              policyName: tenantPolicy.displayName || tenantPolicy.name || 'Unknown Policy',
+              complianceState: 'Not in Device Report',
+              targets
+            });
+          }
         }
-        if (targets.length === 0) {
-          targets.push({ groupName: 'No Assignments', membershipType: '-', targetType: '-' });
-        }
-        return { policyName: policy.policyName, complianceState: policy.complianceState, targets };
-      });
-      chrome.storage.local.set({ lastComplianceAssignments: tableData });
-      updateComplianceTable(tableData);
-      logMessage(`checkCompliance: Found ${tableData.length} compliance policies with assignments`);
-      showNotification('Compliance policies loaded successfully', 'success');
+      }
+      
+      // Merge additional policies with the original results
+      const finalTableData = [...tableData, ...additionalPolicies];
+      logMessage(`checkCompliance: Final results - ${tableData.length} from device report + ${additionalPolicies.length} from tenant = ${finalTableData.length} total policies`);
+      
+      chrome.storage.local.set({ lastComplianceAssignments: finalTableData });
+      updateComplianceTable(finalTableData);
+      logMessage(`checkCompliance: Found ${finalTableData.length} compliance policies with assignments`);
+      showResultNotification('Compliance policies loaded successfully', 'success');
     } catch (error) {
       logMessage(`checkCompliance: Error - ${error.message}`);
-      showNotification('Failed to load compliance policies: ' + error.message, 'error');
+      showResultNotification('Failed to load compliance policies: ' + error.message, 'error');
     }
   };
 
@@ -1992,14 +2422,14 @@ document.addEventListener("DOMContentLoaded", () => {
     chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
       if (!tabs || !tabs[0]) {
         logMessage("downloadScript: No active tab found");
-        showNotification('No active tab found.', 'error');
+        showResultNotification('No active tab found.', 'error');
         return;
       }
       const url = tabs[0].url;
       const policyMatch = url.match(/policyId\/([\w-]+)/);
       if (!policyMatch || !policyMatch[1]) {
         logMessage("downloadScript: No policyId found in URL");
-        showNotification('Could not find policy ID in the current URL.', 'error');
+        showResultNotification('Could not find policy ID in the current URL.', 'error');
         return;
       }
       const policyId = policyMatch[1];
@@ -2023,17 +2453,17 @@ document.addEventListener("DOMContentLoaded", () => {
         a.click();
         window.URL.revokeObjectURL(blobUrl);
         document.body.removeChild(a);
-        showNotification('Script downloaded successfully', 'success');
+        showResultNotification('Script downloaded successfully', 'success');
       } catch (error) {
         logMessage(`downloadScript: Error - ${error.message}`);
-        showNotification('Failed to download script: ' + error.message, 'error');
+        showResultNotification('Failed to download script: ' + error.message, 'error');
       }
     });
   };
   // Handle App Assignments
   const handleAppsAssignment = async () => {
     logMessage("appsAssignment clicked");
-    showNotification('Fetching app assignments...', 'info');
+    showProcessingNotification('Fetching app assignments...');
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
 
@@ -2113,13 +2543,15 @@ document.addEventListener("DOMContentLoaded", () => {
         }).catch(() => ({ value: [] }));
         const assignments = assignmentData.value || [];
         const validTargets = [];
-        assignments.forEach(assignment => {
-          if (!assignment.target) return;
+        
+        // Process assignments sequentially to avoid overwhelming the API
+        for (const assignment of assignments) {
+          if (!assignment.target) continue;
           const intentInfo = assignment.intent || app.mobileAppIntent;
           const typeRaw = (assignment.target['@odata.type'] || '').toLowerCase();
 
           // Skip exclusions
-          if (typeRaw.includes('exclusion')) return;
+          if (typeRaw.includes('exclusion')) continue;
 
           if (typeRaw.includes('alldevicesassignmenttarget')) {
             validTargets.push({
@@ -2137,21 +2569,39 @@ document.addEventListener("DOMContentLoaded", () => {
             });
           } else if (typeRaw.includes('groupassignmenttarget')) {
             const groupId = assignment.target.groupId;
-            const groupName = groupMaps.allGroups.has(groupId) ? groupMaps.allGroups.get(groupId) : 'Group ID: ' + groupId.substring(0, 8) + '...';
-
-            // Skip unresolved group IDs
-            if (groupName.startsWith('Group ID:')) return;
-
-            // Determine membership type based on direct vs transitive membership
-            let membershipType = 'Direct';
-            const isDirectMember = groupMaps.directGroups.has(groupId);
-            const isTransitiveMember = groupMaps.transitiveGroups.has(groupId);
+            let groupName, membershipType;
             
-            if (!isDirectMember && isTransitiveMember) {
-              membershipType = 'Transitive';
-              logMessage(`appsAssignment: Group ${groupName} (${groupId}) - Transitive membership detected`);
-            } else if (isDirectMember) {
-              logMessage(`appsAssignment: Group ${groupName} (${groupId}) - Direct membership detected`);
+            if (groupMaps.allGroups.has(groupId)) {
+              // Group found in initial mapping
+              groupName = groupMaps.allGroups.get(groupId);
+              
+              // Determine membership type based on direct vs transitive membership
+              const isDirectMember = groupMaps.directGroups.has(groupId);
+              const isTransitiveMember = groupMaps.transitiveGroups.has(groupId);
+              
+              if (!isDirectMember && isTransitiveMember) {
+                membershipType = 'Transitive';
+                logMessage(`appsAssignment: Group ${groupName} (${groupId}) - Transitive membership detected`);
+              } else if (isDirectMember) {
+                membershipType = 'Direct';
+                logMessage(`appsAssignment: Group ${groupName} (${groupId}) - Direct membership detected`);
+              } else {
+                membershipType = 'Direct'; // Default fallback
+              }
+            } else {
+              // Group not found in initial mapping - try to resolve it
+              logMessage(`appsAssignment: Group ${groupId} not found in groupMaps, attempting to resolve...`);
+              const resolvedGroup = await resolveGroupInfo(groupId, deviceObjectId, userObjectId, token, groupMaps);
+              
+              if (resolvedGroup) {
+                groupName = resolvedGroup.groupName;
+                membershipType = resolvedGroup.membershipType;
+                logMessage(`appsAssignment: Successfully resolved missing group ${groupName} (${groupId})`);
+              } else {
+                // Group exists in assignment but device/user is not a member - correctly filter out
+                logMessage(`appsAssignment: Group ${groupId} assignment filtered out (device/user not a member)`);
+                continue;
+              }
             }
 
             validTargets.push({
@@ -2169,7 +2619,8 @@ document.addEventListener("DOMContentLoaded", () => {
               intent: intentInfo
             });
           }
-        });
+        }
+        
         if (validTargets.length === 0) {
           validTargets.push({
             groupName: 'No Assignments',
@@ -2189,16 +2640,16 @@ document.addEventListener("DOMContentLoaded", () => {
       chrome.storage.local.set({ lastAppAssignments: appAssignments });
       updateAppTable(appAssignments);
       logMessage(`appsAssignment: Found ${appAssignments.length} apps total`);
-      showNotification('App assignments loaded successfully', 'success');
+      showResultNotification('App assignments loaded successfully', 'success');
     } catch (error) {
       logMessage(`appsAssignment: Error - ${error.message}`);
-      showNotification('Failed to load app assignments: ' + error.message, 'error');
+      showResultNotification('Failed to load app assignments: ' + error.message, 'error');
     }
   };
   // Handle PowerShell Profiles (scripts)
   const handlePwshProfiles = async () => {
     logMessage("pwshProfiles clicked");
-    showNotification('Fetching PowerShell profiles...', 'info');
+    showProcessingNotification('Fetching PowerShell profiles...');
     document.getElementById('profileFilterInput').value = '';
     chrome.storage.local.set({ profileFilterValue: '' });
 
@@ -2242,75 +2693,101 @@ document.addEventListener("DOMContentLoaded", () => {
         headers: { "Authorization": token, "Content-Type": "application/json" }
       });
       if (!scriptsData.value || scriptsData.value.length === 0) {
-        showNotification('No PowerShell profiles found.', 'info');
+        showResultNotification('No PowerShell profiles found.', 'info');
         clearTableAndPagination();
         return;
       }
       const matchedScripts = [];
       let matchCount = 0;
-      scriptsData.value.forEach(script => {
+      
+      // Process scripts sequentially for better error handling and group resolution
+      for (const script of scriptsData.value) {
         if (!script.assignments || script.assignments.length === 0) {
           logMessage(`pwshProfiles: Script "${script.displayName}" has no assignments - skipping`);
-          return;
+          continue;
         }
-        script.assignments.forEach(asg => {
+        
+        for (const asg of script.assignments) {
           if (!asg.target) {
             logMessage(`pwshProfiles: Script "${script.displayName}" has assignment without target - skipping`);
-            return;
+            continue;
           }
           let targetName = '';
+          let targetTypeInfo = '';
           let isMatch = false;
+          
           if (asg.target.groupId) {
-            if (groupMaps.allGroups.has(asg.target.groupId)) {
-              targetName = groupMaps.allGroups.get(asg.target.groupId);
+            const groupId = asg.target.groupId;
+            
+            if (groupMaps.allGroups.has(groupId)) {
+              targetName = groupMaps.allGroups.get(groupId);
+              // Determine if it's a device or user group based on current target mode
+              targetTypeInfo = state.targetMode === 'device' ? 'Device' : 'User';
               isMatch = true;
               matchCount++;
               logMessage(`pwshProfiles: MATCH - Group ${targetName}`);
             } else {
-              logMessage(`pwshProfiles: NO MATCH - Group ID ${asg.target.groupId} not in user/device groups - skipping`);
-              return;
+              // Group not found in initial mapping - try to resolve it
+              logMessage(`pwshProfiles: Group ${groupId} not found in groupMaps, attempting to resolve...`);
+              const resolvedGroup = await resolveGroupInfo(groupId, deviceObjectId, userObjectId, token, groupMaps);
+              
+              if (resolvedGroup) {
+                targetName = resolvedGroup.groupName;
+                targetTypeInfo = state.targetMode === 'device' ? 'Device' : 'User';
+                isMatch = true;
+                matchCount++;
+                logMessage(`pwshProfiles: MATCH - Resolved group ${targetName}`);
+              } else {
+                // Group exists in assignment but device/user is not a member - correctly filter out
+                logMessage(`pwshProfiles: Group ${groupId} assignment filtered out (device/user not a member)`);
+                continue;
+              }
             }
           } else if (asg.target['@odata.type']) {
             const targetType = asg.target['@odata.type'].toLowerCase();
             if (targetType.includes('alldevicesassignmenttarget')) {
               targetName = 'All Devices';
+              targetTypeInfo = 'Device';
               isMatch = true;
               matchCount++;
               logMessage(`pwshProfiles: MATCH - All Devices`);
             } else if (targetType.includes('allusersassignmenttarget') || targetType.includes('alllicensedusersassignmenttarget')) {
               targetName = 'All Users';
+              targetTypeInfo = 'User';
               isMatch = true;
               matchCount++;
               logMessage(`pwshProfiles: MATCH - All Users`);
             } else {
               logMessage(`pwshProfiles: UNKNOWN target type ${targetType} - skipping`);
-              return;
+              continue;
             }
           } else {
             logMessage(`pwshProfiles: Assignment has no target info - skipping`);
-            return;
+            continue;
           }
+          
           if (isMatch) {
             matchedScripts.push({
               scriptName: script.displayName,
               description: script.description || '',
               targetName,
-              targetGroupId: asg.target.groupId || null // Include group ID for dynamic group checking
+              targetGroupId: asg.target.groupId || null, // Include group ID for dynamic group checking
+              targetType: targetTypeInfo // Store the target type (Device/User)
             });
           }
-        });
-      });
+        }
+      }
       chrome.storage.local.set({ lastPwshAssignments: matchedScripts });
       updatePwshTable(matchedScripts);
       logMessage(`pwshProfiles: Found ${matchCount} matching assignments, saved ${matchedScripts.length} script entries`);
       if (matchCount === 0) {
-        showNotification('No matching PowerShell profiles found for this device/user.', 'info');
+        showResultNotification('No matching PowerShell profiles found for this device/user.', 'info');
       } else {
-        showNotification(`PowerShell profiles loaded. Found ${matchCount} matches.`, 'success');
+        showResultNotification(`PowerShell profiles loaded. Found ${matchCount} matches.`, 'success');
       }
     } catch (error) {
       logMessage(`pwshProfiles: Error - ${error.message}`);
-      showNotification('Failed to load PowerShell profiles: ' + error.message, 'error');
+      showResultNotification('Failed to load PowerShell profiles: ' + error.message, 'error');
     }
   };
 
@@ -2319,13 +2796,13 @@ document.addEventListener("DOMContentLoaded", () => {
     logMessage("createGroup clicked");
     const groupName = document.getElementById("groupSearchInput").value.trim();
     if (!groupName) {
-      showNotification('Please enter a group name.', 'error');
+      showResultNotification('Please enter a group name.', 'error');
       return;
     }
     const mailNickname = groupName.substring(0, 10).replace(/[^a-zA-Z0-9]/g, '');
     chrome.storage.local.get("msGraphToken", async (data) => {
       if (!data.msGraphToken) {
-        showNotification('No token captured. Please login first.', 'error');
+        showResultNotification('No token captured. Please login first.', 'error');
         return;
       }
       try {
@@ -2343,12 +2820,12 @@ document.addEventListener("DOMContentLoaded", () => {
           })
         });
         logMessage("Group created successfully");
-        showNotification('Group created successfully!', 'info');
+        showResultNotification('Group created successfully!', 'success');
         // Refresh group list
         document.getElementById("searchGroup").click();
       } catch (error) {
         logMessage(`createGroup: Error - ${error.message}`);
-        showNotification('Error creating group: ' + error.message, 'error');
+        showResultNotification('Error creating group: ' + error.message, 'error');
       }
     });
   };
@@ -2364,7 +2841,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (!logPaths) {
       logMessage("collectLogs: No log paths entered");
-      showNotification("Log collection canceled.", "info");
+      showResultNotification("Log collection canceled.", "info");
       return;
     }
 
@@ -2373,7 +2850,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (!appId) {
       logMessage("collectLogs: No AppID entered");
-      showNotification("AppID is required for log collection.", "error");
+      showResultNotification("AppID is required for log collection.", "error");
       return;
     }
 
@@ -2445,10 +2922,10 @@ document.addEventListener("DOMContentLoaded", () => {
       });
 
       logMessage("collectLogs: Log collection request successful");
-      showNotification("Log collection initiated successfully. The logs will be collected on the device and uploaded to Intune.", "success");
+      showResultNotification("Log collection initiated successfully. The logs will be collected on the device and uploaded to Intune.", "success");
     } catch (error) {
       logMessage(`collectLogs: Error - ${error.message}`);
-      showNotification('Failed to collect logs: ' + error.message, 'error');
+      showResultNotification('Failed to collect logs: ' + error.message, 'error');
     }
   };
 
@@ -2487,35 +2964,133 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
   });
-  document.querySelector('th.sortable').addEventListener('click', function () {
-    state.sortDirection = state.sortDirection === 'asc' ? 'desc' : 'asc';
-    this.classList.toggle('asc');
-    this.classList.toggle('desc');
-    // Re-render the current table based on display type
-    if (state.currentDisplayType === 'config') {
-      chrome.storage.local.get(['lastConfigAssignments'], (data) => {
-        if (data.lastConfigAssignments) updateConfigTable(data.lastConfigAssignments, false);
-      });
-    } else if (state.currentDisplayType === 'apps') {
-      chrome.storage.local.get(['lastAppAssignments'], (data) => {
-        if (data.lastAppAssignments) updateAppTable(data.lastAppAssignments, false);
-      });
-    } else if (state.currentDisplayType === 'compliance') {
-      chrome.storage.local.get(['lastComplianceAssignments'], (data) => {
-        if (data.lastComplianceAssignments) updateComplianceTable(data.lastComplianceAssignments, false);
-      });
-    } else if (state.currentDisplayType === 'pwsh') {
-      chrome.storage.local.get(['lastPwshAssignments'], (data) => {
-        if (data.lastPwshAssignments) updatePwshTable(data.lastPwshAssignments, false);
-      });
-    } else if (state.currentDisplayType === 'groupMembers') {
-      chrome.storage.local.get(['lastGroupMembers'], (data) => {
-        if (data.lastGroupMembers) updateGroupMembersTable(data.lastGroupMembers, false);
-      });
+  // Use event delegation for sortable headers since they get replaced when table headers change
+  document.addEventListener('click', function (e) {
+    // Check if the clicked element is a sortable header
+    if (e.target && e.target.classList.contains('sortable')) {
+      state.sortDirection = state.sortDirection === 'asc' ? 'desc' : 'asc';
+      e.target.classList.toggle('asc');
+      e.target.classList.toggle('desc');
+      // Re-render the current table based on display type
+      if (state.currentDisplayType === 'config') {
+        chrome.storage.local.get(['lastConfigAssignments'], (data) => {
+          if (data.lastConfigAssignments) updateConfigTable(data.lastConfigAssignments, false);
+        });
+      } else if (state.currentDisplayType === 'apps') {
+        chrome.storage.local.get(['lastAppAssignments'], (data) => {
+          if (data.lastAppAssignments) updateAppTable(data.lastAppAssignments, false);
+        });
+      } else if (state.currentDisplayType === 'compliance') {
+        chrome.storage.local.get(['lastComplianceAssignments'], (data) => {
+          if (data.lastComplianceAssignments) updateComplianceTable(data.lastComplianceAssignments, false);
+        });
+      } else if (state.currentDisplayType === 'pwsh') {
+        chrome.storage.local.get(['lastPwshAssignments'], (data) => {
+          if (data.lastPwshAssignments) updatePwshTable(data.lastPwshAssignments, false);
+        });
+      } else if (state.currentDisplayType === 'groupMembers') {
+        chrome.storage.local.get(['lastGroupMembers'], (data) => {
+          if (data.lastGroupMembers) updateGroupMembersTable(data.lastGroupMembers, false);
+        });
+      }
     }
   });
   // Theme toggle button
   document.getElementById("theme-toggle").addEventListener("click", toggleTheme);
+
+  // Settings menu functionality
+  const settingsButton = document.getElementById("settingsButton");
+  const settingsDropdown = document.getElementById("settingsDropdown");
+  
+  settingsButton.addEventListener("click", (e) => {
+    e.stopPropagation();
+    settingsDropdown.classList.toggle("show");
+  });
+
+  // Close settings dropdown when clicking outside
+  document.addEventListener("click", (e) => {
+    if (!settingsButton.contains(e.target) && !settingsDropdown.contains(e.target)) {
+      settingsDropdown.classList.remove("show");
+    }
+  });
+
+  // Settings menu options
+  document.getElementById("showWelcomeOption").addEventListener("click", (e) => {
+    e.preventDefault();
+    settingsDropdown.classList.remove("show");
+    WelcomeNotification.showManual();
+    logMessage('Welcome notification shown via settings menu');
+  });
+
+  document.getElementById("resetWelcomeOption").addEventListener("click", (e) => {
+    e.preventDefault();
+    settingsDropdown.classList.remove("show");
+    WelcomeNotification.reset();
+    showResultNotification('Welcome notification status reset - will show on next extension load', 'info');
+    logMessage('Welcome notification status reset via settings menu');
+  });
+
+  // Clear Extension Storage option
+  document.getElementById("clearStorageOption").addEventListener("click", (e) => {
+    e.preventDefault();
+    settingsDropdown.classList.remove("show");
+    
+    // Show confirmation dialog
+    if (confirm('Are you sure you want to clear all extension storage? This will remove all cached data, settings, and search history. This action cannot be undone.')) {
+      clearExtensionStorage();
+    }
+  });
+
+  // Function to clear all extension storage
+  const clearExtensionStorage = () => {
+    // Preserve current theme before clearing storage
+    const currentTheme = state.theme;
+    
+    chrome.storage.local.clear(() => {
+      if (chrome.runtime.lastError) {
+        showResultNotification('Error clearing extension storage: ' + chrome.runtime.lastError.message, 'error');
+        logMessage('Error clearing extension storage: ' + chrome.runtime.lastError.message);
+      } else {
+        // Reset state variables to default values (but keep theme)
+        state.currentDisplayType = 'config';
+        state.sortDirection = 'asc';
+        state.theme = currentTheme; // Keep current theme
+        state.targetMode = 'device';
+        state.selectedTableRows.clear();
+        state.dynamicGroups.clear();
+        state.pagination = {
+          currentPage: 1,
+          itemsPerPage: 10,
+          totalItems: 0,
+          totalPages: 0,
+          filteredData: [],
+          selectedRowIds: new Set()
+        };
+
+        // Restore theme setting to storage
+        chrome.storage.local.set({ theme: currentTheme });
+
+        // Reset UI to default state (but keep current theme)
+        applyTheme(currentTheme);
+        document.getElementById('deviceModeBtn').classList.add('active');
+        document.getElementById('userModeBtn').classList.remove('active');
+        document.getElementById('addBtnText').textContent = 'Add Device to Groups';
+        document.getElementById('removeBtnText').textContent = 'Remove Device from Groups';
+        
+        // Clear all table content
+        document.getElementById('configTableBody').innerHTML = '';
+        document.getElementById('groupResults').innerHTML = '';
+        document.getElementById('groupSearchInput').value = '';
+        document.getElementById('profileFilterInput').value = '';
+        
+        // Reset pagination
+        document.getElementById('paginationContainer').style.display = 'none';
+        
+        showResultNotification('Extension storage cleared successfully. All cached data has been reset (theme preference preserved).', 'success');
+        logMessage('Extension storage cleared successfully via settings menu (theme preserved)');
+      }
+    });
+  };
 
   // Pagination event listeners
   document.getElementById("prevPageBtn").addEventListener("click", () => {
@@ -2554,8 +3129,41 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("deviceModeBtn").addEventListener("click", () => handleTargetModeToggle('device'));
   document.getElementById("userModeBtn").addEventListener("click", () => handleTargetModeToggle('user'));
 
+  // ── Welcome Notification Management ───────────────────────────────────
+  // Add keyboard shortcut to show welcome notification (Ctrl+Shift+W)
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey && e.shiftKey && e.key === 'W') {
+      e.preventDefault();
+      WelcomeNotification.showManual();
+      logMessage('Welcome notification shown manually via keyboard shortcut');
+    }
+    
+    // Hidden admin shortcut to reset welcome status (Ctrl+Shift+Alt+R)
+    if (e.ctrlKey && e.shiftKey && e.altKey && e.key === 'R') {
+      e.preventDefault();
+      WelcomeNotification.reset();
+      showResultNotification('Welcome notification status reset - will show on next load', 'info');
+      logMessage('Welcome notification status reset via keyboard shortcut');
+    }
+  });
+
+  // Add help function for welcome notification
+  window.showWelcome = () => {
+    WelcomeNotification.showManual();
+  };
+
+  window.resetWelcome = () => {
+    WelcomeNotification.reset();
+  };
+
   // ── Initial Restoration Calls ─────────────────────────────────────────
   restoreState();
   restoreFilterValue();
   initializeTheme();
+  
+  // Set version number in settings dropdown
+  const versionElement = document.getElementById('extensionVersion');
+  if (versionElement && chrome.runtime && chrome.runtime.getManifest) {
+    versionElement.textContent = chrome.runtime.getManifest().version;
+  }
 });
