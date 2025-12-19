@@ -3266,7 +3266,8 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("pwshProfiles").addEventListener("click", handlePwshProfiles);
   document.getElementById("collectLogs").addEventListener("click", handleCollectLogs);
   document.getElementById("checkGroupUsage").addEventListener("click", handleCheckGroupUsage);
-  document.getElementById("createGroup").addEventListener("click", handleCreateGroup); document.getElementById("groupResults").addEventListener("change", (event) => {
+  document.getElementById("createGroup").addEventListener("click", handleCreateGroup);
+  document.getElementById("groupResults").addEventListener("change", (event) => {
     if (event.target.type === "checkbox") {
       // Clear table selections when selecting checkboxes
       clearTableSelection();
