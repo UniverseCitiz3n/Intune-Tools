@@ -136,6 +136,16 @@ document.addEventListener("DOMContentLoaded", () => {
           updateGroupMembersTable(filteredResults, false);
         }
       });
+    } else if (state.currentDisplayType === 'groupUsage') {
+      chrome.storage.local.get(['lastGroupUsage'], (data) => {
+        if (data.lastGroupUsage) {
+          const filteredResults = [...data.lastGroupUsage].filter(item =>
+            item.itemName.toLowerCase().includes(filterText)
+          );
+
+          updateGroupUsageTable(filteredResults, false);
+        }
+      });
     }
   };
 
@@ -158,6 +168,8 @@ document.addEventListener("DOMContentLoaded", () => {
           const upn = (item.userPrincipalName || '').toLowerCase();
           const deviceId = (item.deviceId || '').toLowerCase();
           return name.includes(searchText) || upn.includes(searchText) || deviceId.includes(searchText);
+        } else if (state.currentDisplayType === 'groupUsage') {
+          return item.itemName.toLowerCase().includes(searchText);
         }
         return true;
       }) : data;
@@ -288,6 +300,8 @@ document.addEventListener("DOMContentLoaded", () => {
       return `${rowData.policyName}-${rowData.targets[0].groupName}-${rowData.targets[0].targetType}`;
     } else if (state.currentDisplayType === 'pwsh') {
       return `${rowData.scriptName}-${rowData.targets[0].groupName}-${rowData.targets[0].targetType}`;
+    } else if (state.currentDisplayType === 'groupUsage') {
+      return `${rowData.itemType}-${rowData.itemName}-${rowData.assignmentType}`;
     }
     return '';
   };
@@ -333,6 +347,8 @@ document.addEventListener("DOMContentLoaded", () => {
       renderPwshTablePage(currentPageData);
     } else if (state.currentDisplayType === 'groupMembers') {
       renderGroupMembersTablePage(currentPageData);
+    } else if (state.currentDisplayType === 'groupUsage') {
+      renderGroupUsageTablePage(currentPageData);
     }
   };
 
@@ -533,6 +549,26 @@ document.addEventListener("DOMContentLoaded", () => {
         <td style="word-wrap: break-word; white-space: normal;">${upnOrId}</td>
         <td style="word-wrap: break-word; white-space: normal;">${objectId}</td>
         <td style="word-wrap: break-word; white-space: normal;">${objectType}</td>
+      </tr>`;
+      rowIndex++;
+    });
+
+    document.getElementById("configTableBody").innerHTML = rows;
+  };
+
+  // renderGroupUsageTablePage: Render group usage results for current page
+  const renderGroupUsageTablePage = (usageItems) => {
+    let rows = '';
+    let rowIndex = (state.pagination.currentPage - 1) * state.pagination.itemsPerPage;
+
+    usageItems.forEach(item => {
+      const rowId = `${item.itemType}-${item.itemName}-${item.assignmentType}`;
+      
+      rows += `<tr data-row-index="${rowIndex}" data-row-id="${rowId}">
+        <td style="word-wrap: break-word; white-space: normal;">${item.itemName || ''}</td>
+        <td style="word-wrap: break-word; white-space: normal;">${item.itemType || ''}</td>
+        <td style="word-wrap: break-word; white-space: normal;">${item.assignmentType || ''}</td>
+        <td style="word-wrap: break-word; white-space: normal;">${item.intent || '-'}</td>
       </tr>`;
       rowIndex++;
     });
@@ -1049,6 +1085,13 @@ document.addEventListener("DOMContentLoaded", () => {
         <th style="word-wrap: break-word; white-space: normal;">Object ID</th>
         <th style="word-wrap: break-word; white-space: normal;">Object Type</th>
       `;
+    } else if (type === 'groupUsage') {
+      headerContent = `
+        <th class="sortable" style="word-wrap: break-word; white-space: normal;">Item Name</th>
+        <th style="word-wrap: break-word; white-space: normal;">Item Type</th>
+        <th style="word-wrap: break-word; white-space: normal;">Assignment Type</th>
+        <th style="word-wrap: break-word; white-space: normal;">Intent</th>
+      `;
     }
     headerRow.innerHTML = headerContent;
     const sortableHeader = document.querySelector('th.sortable');
@@ -1265,10 +1308,37 @@ document.addEventListener("DOMContentLoaded", () => {
       sortableHeader.classList.add(state.sortDirection);
     }
   };
+
+  // updateGroupUsageTable: Update group usage table
+  const updateGroupUsageTable = (usageData, updateDisplay = true) => {
+    if (updateDisplay) {
+      state.currentDisplayType = 'groupUsage';
+      chrome.storage.local.set({ currentDisplayType: state.currentDisplayType });
+    }
+    state.pagination.itemsPerPage = 10;
+    updateTableHeaders('groupUsage');
+    usageData.sort((a, b) => a.itemName.localeCompare(b.itemName));
+    if (state.sortDirection === 'desc') usageData.reverse();
+
+    // Update pagination state
+    const filterValue = document.getElementById('profileFilterInput').value.toLowerCase();
+    updatePaginationState(usageData, filterValue);
+    
+    // Render current page
+    renderCurrentPage();
+    updatePaginationControls();
+
+    const sortableHeader = document.querySelector('th.sortable');
+    if (sortableHeader) {
+      sortableHeader.classList.remove('desc', 'asc');
+      sortableHeader.classList.add(state.sortDirection);
+    }
+  };
+
   // ── State Restoration Functions ─────────────────────────────────────────
   const restoreFilterValue = () => {
     chrome.storage.local.get(
-      ['profileFilterValue', 'currentDisplayType', 'targetMode', 'lastComplianceAssignments', 'lastAppAssignments', 'lastConfigAssignments', 'lastPwshAssignments', 'lastGroupMembers'],
+      ['profileFilterValue', 'currentDisplayType', 'targetMode', 'lastComplianceAssignments', 'lastAppAssignments', 'lastConfigAssignments', 'lastPwshAssignments', 'lastGroupMembers', 'lastGroupUsage'],
       (data) => {
         // Restore target mode
         if (data.targetMode) {
@@ -1299,6 +1369,9 @@ document.addEventListener("DOMContentLoaded", () => {
           } else if (state.currentDisplayType === 'groupMembers' && data.lastGroupMembers) {
             chrome.storage.local.remove(['lastConfigAssignments', 'lastAppAssignments', 'lastComplianceAssignments', 'lastPwshAssignments']);
             updateGroupMembersTable(data.lastGroupMembers, false);
+          } else if (state.currentDisplayType === 'groupUsage' && data.lastGroupUsage) {
+            chrome.storage.local.remove(['lastConfigAssignments', 'lastAppAssignments', 'lastComplianceAssignments', 'lastPwshAssignments', 'lastGroupMembers']);
+            updateGroupUsageTable(data.lastGroupUsage, false);
           }
         } else {
           clearTableAndPagination();
@@ -2929,6 +3002,250 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   };
 
+  // Handle Check Group Usage - Check where a selected Entra ID group is used in Intune
+  const handleCheckGroupUsage = async () => {
+    logMessage("checkGroupUsage clicked");
+    
+    // Get selected groups from search results
+    const selectedCheckboxes = document.querySelectorAll("#groupResults input[type=checkbox]:checked");
+    
+    if (selectedCheckboxes.length === 0) {
+      showResultNotification('Please search for groups and select one group to check its usage.', 'info');
+      return;
+    }
+    
+    if (selectedCheckboxes.length > 1) {
+      showResultNotification('Please select only one group to check its usage.', 'info');
+      return;
+    }
+    
+    const selectedGroup = {
+      id: selectedCheckboxes[0].value,
+      name: selectedCheckboxes[0].dataset.groupName
+    };
+    
+    logMessage(`checkGroupUsage: Checking usage for group "${selectedGroup.name}" (${selectedGroup.id})`);
+    showProcessingNotification(`Checking where group "${selectedGroup.name}" is used in Intune...`);
+    
+    document.getElementById('profileFilterInput').value = '';
+    chrome.storage.local.set({ profileFilterValue: '' });
+    
+    // Clear other cached assignments
+    chrome.storage.local.remove(['lastConfigAssignments', 'lastAppAssignments', 'lastComplianceAssignments', 'lastPwshAssignments', 'lastGroupMembers']);
+    
+    // Clear table selection before loading new data
+    clearTableSelection();
+    
+    try {
+      const token = await getToken();
+      const usageResults = [];
+      
+      // Helper function to check if a group is assigned in a list of assignments
+      const checkGroupInAssignments = (assignments, groupId) => {
+        const results = [];
+        if (!assignments || !Array.isArray(assignments)) return results;
+        
+        for (const assignment of assignments) {
+          if (!assignment.target) continue;
+          const targetType = (assignment.target['@odata.type'] || '').toLowerCase();
+          const targetGroupId = assignment.target.groupId;
+          
+          if (targetGroupId === groupId) {
+            const isExclusion = targetType.includes('exclusion');
+            results.push({
+              assignmentType: isExclusion ? 'Exclude' : 'Include',
+              intent: assignment.intent || '-'
+            });
+          }
+        }
+        return results;
+      };
+      
+      // 1. Check Configuration Profiles
+      logMessage('checkGroupUsage: Checking configuration profiles...');
+      try {
+        // Fetch configuration policies
+        const configPoliciesData = await fetchJSON('https://graph.microsoft.com/beta/deviceManagement/configurationPolicies?$expand=assignments&$top=999', {
+          method: "GET",
+          headers: { "Authorization": token, "Content-Type": "application/json" }
+        });
+        
+        for (const policy of (configPoliciesData.value || [])) {
+          const matches = checkGroupInAssignments(policy.assignments, selectedGroup.id);
+          for (const match of matches) {
+            usageResults.push({
+              itemName: policy.name || 'Unknown Policy',
+              itemType: 'Configuration Profile',
+              assignmentType: match.assignmentType,
+              intent: match.intent
+            });
+          }
+        }
+        
+        // Fetch device configurations (older style)
+        const deviceConfigsData = await fetchJSON('https://graph.microsoft.com/beta/deviceManagement/deviceConfigurations?$expand=assignments&$top=999', {
+          method: "GET",
+          headers: { "Authorization": token, "Content-Type": "application/json" }
+        });
+        
+        for (const config of (deviceConfigsData.value || [])) {
+          const matches = checkGroupInAssignments(config.assignments, selectedGroup.id);
+          for (const match of matches) {
+            usageResults.push({
+              itemName: config.displayName || 'Unknown Configuration',
+              itemType: 'Device Configuration',
+              assignmentType: match.assignmentType,
+              intent: match.intent
+            });
+          }
+        }
+        
+        logMessage(`checkGroupUsage: Found ${usageResults.length} configuration assignments`);
+      } catch (configError) {
+        logMessage(`checkGroupUsage: Error checking configurations - ${configError.message}`);
+      }
+      
+      // 2. Check Compliance Policies
+      logMessage('checkGroupUsage: Checking compliance policies...');
+      try {
+        const complianceData = await fetchJSON('https://graph.microsoft.com/beta/deviceManagement/deviceCompliancePolicies?$expand=assignments&$top=999', {
+          method: "GET",
+          headers: { "Authorization": token, "Content-Type": "application/json" }
+        });
+        
+        const beforeCount = usageResults.length;
+        for (const policy of (complianceData.value || [])) {
+          const matches = checkGroupInAssignments(policy.assignments, selectedGroup.id);
+          for (const match of matches) {
+            usageResults.push({
+              itemName: policy.displayName || 'Unknown Policy',
+              itemType: 'Compliance Policy',
+              assignmentType: match.assignmentType,
+              intent: match.intent
+            });
+          }
+        }
+        logMessage(`checkGroupUsage: Found ${usageResults.length - beforeCount} compliance policy assignments`);
+      } catch (complianceError) {
+        logMessage(`checkGroupUsage: Error checking compliance policies - ${complianceError.message}`);
+      }
+      
+      // 3. Check Applications
+      logMessage('checkGroupUsage: Checking applications...');
+      try {
+        const appsData = await fetchJSON('https://graph.microsoft.com/beta/deviceAppManagement/mobileApps?$filter=isAssigned eq true&$top=999', {
+          method: "GET",
+          headers: { "Authorization": token, "Content-Type": "application/json" }
+        });
+        
+        const beforeCount = usageResults.length;
+        for (const app of (appsData.value || [])) {
+          try {
+            const appAssignmentsData = await fetchJSON(`https://graph.microsoft.com/beta/deviceAppManagement/mobileApps/${app.id}/assignments`, {
+              method: "GET",
+              headers: { "Authorization": token, "Content-Type": "application/json" }
+            });
+            
+            for (const assignment of (appAssignmentsData.value || [])) {
+              if (!assignment.target) continue;
+              const targetType = (assignment.target['@odata.type'] || '').toLowerCase();
+              const targetGroupId = assignment.target.groupId;
+              
+              if (targetGroupId === selectedGroup.id) {
+                const isExclusion = targetType.includes('exclusion');
+                // For apps, use intent (required, available, uninstall)
+                let intent = assignment.intent || 'unknown';
+                if (intent === 'required') intent = 'Required';
+                else if (intent === 'available') intent = 'Available';
+                else if (intent === 'uninstall') intent = 'Uninstall';
+                else if (intent === 'availableWithoutEnrollment') intent = 'Available (No Enrollment)';
+                
+                usageResults.push({
+                  itemName: app.displayName || 'Unknown App',
+                  itemType: 'Application',
+                  assignmentType: isExclusion ? 'Exclude' : 'Include',
+                  intent: intent
+                });
+              }
+            }
+          } catch (appAssignError) {
+            // Skip apps that fail to get assignments
+            continue;
+          }
+        }
+        logMessage(`checkGroupUsage: Found ${usageResults.length - beforeCount} app assignments`);
+      } catch (appsError) {
+        logMessage(`checkGroupUsage: Error checking applications - ${appsError.message}`);
+      }
+      
+      // 4. Check PowerShell Scripts
+      logMessage('checkGroupUsage: Checking PowerShell scripts...');
+      try {
+        const scriptsData = await fetchJSON('https://graph.microsoft.com/beta/deviceManagement/deviceManagementScripts?$expand=assignments&$top=999', {
+          method: "GET",
+          headers: { "Authorization": token, "Content-Type": "application/json" }
+        });
+        
+        const beforeCount = usageResults.length;
+        for (const script of (scriptsData.value || [])) {
+          const matches = checkGroupInAssignments(script.assignments, selectedGroup.id);
+          for (const match of matches) {
+            usageResults.push({
+              itemName: script.displayName || 'Unknown Script',
+              itemType: 'PowerShell Script',
+              assignmentType: match.assignmentType,
+              intent: match.intent
+            });
+          }
+        }
+        logMessage(`checkGroupUsage: Found ${usageResults.length - beforeCount} PowerShell script assignments`);
+      } catch (scriptsError) {
+        logMessage(`checkGroupUsage: Error checking PowerShell scripts - ${scriptsError.message}`);
+      }
+      
+      // 5. Check Shell Scripts (macOS/Linux)
+      logMessage('checkGroupUsage: Checking Shell scripts...');
+      try {
+        const shellScriptsData = await fetchJSON('https://graph.microsoft.com/beta/deviceManagement/deviceShellScripts?$expand=assignments&$top=999', {
+          method: "GET",
+          headers: { "Authorization": token, "Content-Type": "application/json" }
+        });
+        
+        const beforeCount = usageResults.length;
+        for (const script of (shellScriptsData.value || [])) {
+          const matches = checkGroupInAssignments(script.assignments, selectedGroup.id);
+          for (const match of matches) {
+            usageResults.push({
+              itemName: script.displayName || 'Unknown Script',
+              itemType: 'Shell Script',
+              assignmentType: match.assignmentType,
+              intent: match.intent
+            });
+          }
+        }
+        logMessage(`checkGroupUsage: Found ${usageResults.length - beforeCount} Shell script assignments`);
+      } catch (shellScriptsError) {
+        logMessage(`checkGroupUsage: Error checking Shell scripts - ${shellScriptsError.message}`);
+      }
+      
+      // Store and display results
+      chrome.storage.local.set({ lastGroupUsage: usageResults });
+      updateGroupUsageTable(usageResults);
+      
+      if (usageResults.length === 0) {
+        showResultNotification(`Group "${selectedGroup.name}" is not assigned to any Intune configurations, compliance policies, applications, or scripts.`, 'info');
+      } else {
+        showResultNotification(`Found ${usageResults.length} assignment(s) for group "${selectedGroup.name}".`, 'success');
+      }
+      
+      logMessage(`checkGroupUsage: Total ${usageResults.length} assignments found for group "${selectedGroup.name}"`);
+      
+    } catch (error) {
+      logMessage(`checkGroupUsage: Error - ${error.message}`);
+      showResultNotification('Failed to check group usage: ' + error.message, 'error');
+    }
+  };
+
   // ── Event Listener Registrations ───────────────────────────────────────
   document.getElementById('profileFilterInput').addEventListener('input', (e) => {
     const filterText = e.target.value.toLowerCase();
@@ -2948,6 +3265,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("appsAssignment").addEventListener("click", handleAppsAssignment);
   document.getElementById("pwshProfiles").addEventListener("click", handlePwshProfiles);
   document.getElementById("collectLogs").addEventListener("click", handleCollectLogs);
+  document.getElementById("checkGroupUsage").addEventListener("click", handleCheckGroupUsage);
   document.getElementById("createGroup").addEventListener("click", handleCreateGroup); document.getElementById("groupResults").addEventListener("change", (event) => {
     if (event.target.type === "checkbox") {
       // Clear table selections when selecting checkboxes
@@ -2991,6 +3309,10 @@ document.addEventListener("DOMContentLoaded", () => {
       } else if (state.currentDisplayType === 'groupMembers') {
         chrome.storage.local.get(['lastGroupMembers'], (data) => {
           if (data.lastGroupMembers) updateGroupMembersTable(data.lastGroupMembers, false);
+        });
+      } else if (state.currentDisplayType === 'groupUsage') {
+        chrome.storage.local.get(['lastGroupUsage'], (data) => {
+          if (data.lastGroupUsage) updateGroupUsageTable(data.lastGroupUsage, false);
         });
       }
     }
