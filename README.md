@@ -145,7 +145,7 @@ Set auto-approve, grab a coffee, and let it run. ☕
 - **Test in Sandbox first** - I mean, that's literally what it does, but don't skip this
 - **Check your detection rules** - Make sure `detection.csv` is set up right
 - **Icon check** - The agent will grab one automatically, but make sure it's not something weird
-- **Have your OAuth token ready** - You'll need it at the end
+- **Have your OAuth token ready** - My favorite approach is Browser DevTools
 
 ### When Things Go Wrong
 
