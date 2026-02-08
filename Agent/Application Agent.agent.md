@@ -231,8 +231,6 @@ Package Configuration Complete:
 - Absolute path to the working folder
 - Application metadata (name, version, vendor, WinGet ID)
 - Icon path (if icon was downloaded)
-- UI language code from configuration
-- Start timestamp for duration tracking
 
 **Expected outcomes**:
 - OAuth token collected and validated
