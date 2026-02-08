@@ -33,7 +33,7 @@ Before starting the workflow, verify the following:
 
 ## 3. WORKFLOW OVERVIEW
 
-**Process Flow**: 1. Pre-Upload Validation → 2. Upload Confirmation → 3. OAuth Token Collection → 4. Deployment Mode Configuration → 5. Detection Rule Configuration → 6. Upload Execution → 7. Result Handling → 8. Summary Report
+**Process Flow**: 1. Pre-Upload Validation → 2. Detection Rule Configuration → 3. OAuth Token Collection → 4. Deployment Mode Configuration → 5. Upload Execution → 6. Result Handling → 7. Summary Report
 
 **Expected Interaction Points**: You will ask the user for OAuth token and deployment mode preferences.
 
@@ -51,13 +51,41 @@ Before starting the workflow, verify the following:
 
 ---
 
-### 4.2 Upload Confirmation
+### 4.2 Detection Rule Configuration
 
-**Question to User**: "Would you like to upload this application to Microsoft Intune?"
+**Detection Options**:
+- **CSV Detection** (default): Uses `detection.csv` file in the working folder to define detection rules
+- **Custom PowerShell Script** (alternative): If user explicitly provides a `.ps1` script path, use PowerShell detection
 
-**Possible Responses**:
-- "Yes" → Proceed to gather upload parameters
-- "No" → Skip upload, report completion without Intune upload
+**detection.csv Location**: `{WorkingFolder}\detection.csv` — this file is located in the root of the package working folder (e.g., `Install-7-Zip-PSADTv4\detection.csv`).
+
+**Default Behavior**:
+1. Check if `detection.csv` exists in the working folder (`{WorkingFolder}\detection.csv`)
+2. **IF** `detection.csv` exists → Read the CSV file and find the row matching the application. Extract the `UninstallString` column value.
+3. Parse the `UninstallString` to determine detection type and build the detection rule:
+   - **MSI Detection**: If `UninstallString` contains an MSI product code (GUID format `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`), extract the GUID and use MSI product code detection
+     - Example: `MsiExec.exe /X{23170F69-40C1-2702-2501-000001000000}` → Extract `{23170F69-40C1-2702-2501-000001000000}` → Use MSI detection with this product code
+   - **File Detection**: If `UninstallString` contains a file path (e.g., `"C:\Program Files\AppName\Uninstall.exe"`), extract the path and use file existence detection
+     - Example: `"C:\Program Files\7-Zip\Uninstall.exe"` → Extract `C:\Program Files\7-Zip\Uninstall.exe` → Use file detection with this path
+4. **ELSE IF** `detection.csv` is missing or `UninstallString` cannot be parsed → Ask user: "No valid detection rule could be extracted from detection.csv. Please provide detection criteria or a PowerShell detection script path."
+5. **IF** user explicitly provides a `.ps1` script path → Use PowerShell script detection
+
+**IMPORTANT — Pre-supplied Detection Preference**: If the orchestrator or user has already indicated a detection method (e.g., "use detection file path from detection.csv"), apply it directly:
+- "use detection file path from detection.csv" → Read detection.csv, extract the file path from `UninstallString`, pass it as `-Detection` parameter
+- "use MSI product code from detection.csv" → Read detection.csv, extract the GUID from `UninstallString`, pass it as `-Detection` parameter
+
+**UninstallString Parsing Rules**:
+| Pattern | Detection Type | Extraction Method |
+|---------|---------------|-------------------|
+| Contains `MsiExec` + `{GUID}` | MSI Product Code | Extract GUID between `{` and `}` |
+| Contains `{GUID}` only | MSI Product Code | Extract GUID between `{` and `}` |
+| Contains quoted file path | File Existence | Remove quotes, use full path |
+| Contains unquoted file path | File Existence | Use full path to executable |
+
+**Examples**:
+- `MsiExec.exe /X{23170F69-40C1-2702-2501-000001000000}` → MSI Detection: `{23170F69-40C1-2702-2501-000001000000}`
+- `"C:\Program Files\7-Zip\Uninstall.exe"` → File Detection: `C:\Program Files\7-Zip\Uninstall.exe`
+- `C:\Program Files\App\uninstall.exe /silent` → File Detection: `C:\Program Files\App\uninstall.exe`
 
 ---
 
@@ -87,39 +115,7 @@ Before starting the workflow, verify the following:
 
 ---
 
-### 4.5 Detection Rule Configuration
-
-**Detection Options**:
-- **CSV Detection** (default): Uses `detection.csv` file in the source package folder to define detection rules
-- **Custom PowerShell Script** (alternative): If user explicitly provides a `.ps1` script path, use PowerShell detection
-
-**Default Behavior**:
-1. Check if `detection.csv` exists in the source package folder
-2. **IF** `detection.csv` exists → Extract the `UninstallString` column value for the application
-3. Parse the `UninstallString` to determine detection type and build the detection rule:
-   - **MSI Detection**: If `UninstallString` contains an MSI product code (GUID format `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`), extract the GUID and use MSI product code detection
-     - Example: `MsiExec.exe /X{23170F69-40C1-2702-2501-000001000000}` → Extract `{23170F69-40C1-2702-2501-000001000000}` → Use MSI detection with this product code
-   - **File Detection**: If `UninstallString` contains a file path (e.g., `"C:\Program Files\AppName\Uninstall.exe"`), extract the path and use file existence detection
-     - Example: `"C:\Program Files\7-Zip\Uninstall.exe"` → Extract `C:\Program Files\7-Zip\Uninstall.exe` → Use file detection with this path
-4. **ELSE IF** `detection.csv` is missing or `UninstallString` cannot be parsed → Ask user: "No valid detection rule could be extracted from detection.csv. Please provide detection criteria or a PowerShell detection script path."
-5. **IF** user explicitly provides a `.ps1` script path → Use PowerShell script detection
-
-**UninstallString Parsing Rules**:
-| Pattern | Detection Type | Extraction Method |
-|---------|---------------|-------------------|
-| Contains `MsiExec` + `{GUID}` | MSI Product Code | Extract GUID between `{` and `}` |
-| Contains `{GUID}` only | MSI Product Code | Extract GUID between `{` and `}` |
-| Contains quoted file path | File Existence | Remove quotes, use full path |
-| Contains unquoted file path | File Existence | Use full path to executable |
-
-**Examples**:
-- `MsiExec.exe /X{23170F69-40C1-2702-2501-000001000000}` → MSI Detection: `{23170F69-40C1-2702-2501-000001000000}`
-- `"C:\Program Files\7-Zip\Uninstall.exe"` → File Detection: `C:\Program Files\7-Zip\Uninstall.exe`
-- `C:\Program Files\App\uninstall.exe /silent` → File Detection: `C:\Program Files\App\uninstall.exe`
-
----
-
-### 4.6 Upload Execution
+### 4.5 Upload Execution
 
 **Script Location**: `{WorkspaceRoot}\bin\Invoke-IntuneUpload.ps1`
 
@@ -180,7 +176,7 @@ Before starting the workflow, verify the following:
 
 ---
 
-### 4.7 Result Handling
+### 4.6 Result Handling
 
 **Script Output**: The script returns a result object with:
 - `Success`: Boolean indicating upload result
@@ -205,7 +201,7 @@ Before starting the workflow, verify the following:
 
 ---
 
-### 4.8 Upload Summary Report
+### 4.7 Upload Summary Report
 
 **Action**: Report final upload results.
 
@@ -274,7 +270,7 @@ Report to user after completing:
 | Intune API 400 Bad Request | Invalid app configuration | Report detailed error, check request body |
 | Intune API 403 Forbidden | Insufficient permissions | Report required permissions, ask user to verify token scope |
 | Azure Storage upload fails | Chunked upload error | Report failure, retry upload or abort |
-| detection.csv missing | File not found in package folder | Ask user for detection criteria or PowerShell script path |
+| detection.csv missing | File not found in working folder | Ask user for detection criteria or PowerShell script path |
 
 ### Escalation Rule:
 If any step fails after one retry attempt, report the error with details and ask user for guidance before proceeding.

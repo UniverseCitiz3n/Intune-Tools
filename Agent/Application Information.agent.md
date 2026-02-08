@@ -146,9 +146,13 @@ AppScriptAuthor             = 'Maciej Horbacz'
 
 **Action**: Gather user preferences and update configuration accordingly.
 
+**IMPORTANT — Pre-supplied Preferences**: If the orchestrator or user has already provided preferences (e.g., "no deferral", "eng ui"), apply them directly without asking the user again. Only ask questions for preferences that were NOT already specified.
+
 #### 4.4.1 Deferral Settings
 
-**Question to User**: "Do you need deferral options for this deployment? If yes, how many times should users be able to defer the installation?"
+**If already specified by user**: Apply directly (e.g., "no deferral" → `AllowDefer = $false`).
+
+**If NOT specified — Question to User**: "Do you need deferral options for this deployment? If yes, how many times should users be able to defer the installation?"
 
 **Possible Responses**:
 - "No" or "0" → Set `AllowDefer = $false`
@@ -164,7 +168,9 @@ DeferTimes      = 1         # Set to user-specified number
 
 #### 4.4.2 UI Language Configuration
 
-**Question to User**: "What language should be used for the deployment UI?"
+**If already specified by user**: Apply directly (e.g., "eng ui" or "EN" → set language to EN).
+
+**If NOT specified — Question to User**: "What language should be used for the deployment UI?"
 
 **Available Languages**:
 - AR (Arabic), CZ (Czech), DA (Danish), DE (German), EN (English)
@@ -196,7 +202,9 @@ DeferTimes      = 1         # Set to user-specified number
 
 #### 4.4.3 Force Countdown Configuration
 
-**Question to User**: "Should a countdown timer be enforced when processes need to be closed? (Default: Yes, 300 seconds)"
+**If already specified by user**: Apply directly.
+
+**If NOT specified — Question to User**: "Should a countdown timer be enforced when processes need to be closed? (Default: Yes, 300 seconds)"
 
 **Possible Responses**:
 - "Yes" or not specified → Set `ForceCountdown = '300'` (5 minutes)

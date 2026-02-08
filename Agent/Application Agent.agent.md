@@ -111,6 +111,20 @@ User Request
 
 ## 4. ORCHESTRATION STEPS
 
+### CRITICAL — Upfront User Preferences
+
+When a user provides preferences in their initial request (e.g., "no deferral, eng ui, upload application, use detection file path from detection.csv"), you MUST:
+1. **Parse all preferences** from the initial request before delegating to any sub-agent
+2. **Pass relevant preferences** to each sub-agent so they do NOT ask the user again for information already provided
+3. **Skip redundant confirmation questions** — if the user already stated their intent (e.g., "upload application"), do not ask them again
+
+**Example**: If user says "prepare 7-zip, no deferral, eng ui, upload":
+- Tell Information agent: deferral = no, language = EN (agent should apply directly, not ask)
+- Skip Step 6 upload confirmation (user already confirmed)
+- Tell Upload agent: user wants to upload (skip upload confirmation question)
+
+---
+
 ### Step 1: Capture Start Timestamp
 
 **CRITICAL**: Record the current date and time at the very beginning of the workflow for duration tracking.
@@ -128,7 +142,7 @@ $startTime = Get-Date
 **Context to pass**:
 - User's requested application name
 - Any version preference specified by user
-- Start timestamp for duration tracking
+- Any user preferences already specified (deferral, language, countdown) — sub-agent should apply these directly without re-asking the user
 
 **Expected outcomes**:
 - WinGet package discovered (ID, Vendor, Name, Version)
@@ -202,7 +216,9 @@ Package Configuration Complete:
 
 **Trigger**: Only if sandbox test passed (`0.code` present).
 
-**Question to User**: "Sandbox test passed successfully. Would you like to upload this application to Microsoft Intune?"
+**IMPORTANT**: If the user already indicated they want to upload in their initial request (e.g., "upload application"), skip this question and proceed directly to icon search and upload.
+
+**Question to User** (only if upload intent was NOT already expressed): "Sandbox test passed successfully. Would you like to upload this application to Microsoft Intune?"
 
 - **"Yes"** → Proceed to icon search and upload
 - **"No"** → Report final summary with duration and end workflow
@@ -229,8 +245,8 @@ Package Configuration Complete:
 
 **Context to pass**:
 - Absolute path to the working folder
-- Application metadata (name, version, vendor, WinGet ID)
-- Icon path (if icon was downloaded)
+- User's detection preference if specified (e.g., "use detection file path from detection.csv")
+- Any other user preferences for upload (deployment modes, etc.)
 
 **Expected outcomes**:
 - OAuth token collected and validated
@@ -377,6 +393,41 @@ If any sub-agent reports a failure that cannot be resolved, the orchestrator rep
    - Collect OAuth token from user
    - Configure deployment modes (Both Interactive)
    - Extract detection rules from detection.csv
+   - Upload to Intune
+   - Report: "App uploaded! Intune App ID: abc123-def456"
+9. **Report final summary** with workflow duration
+
+---
+
+### Example 2: 7-Zip with Upfront Preferences
+
+**User Request**: "Please prepare 7-zip application, no deferral, eng ui, run test in sandbox, upload application, use detection file path from detection.csv"
+
+**Orchestrator Actions** (preferences parsed upfront — no redundant questions):
+1. **Capture start timestamp**
+2. **→ Application Information agent** (pass: deferral=no, language=EN):
+   - Search WinGet → Find "7zip.7zip" version 24.09
+   - Create folder: `Install-7-Zip-PSADTv4`
+   - Update configuration (AppId="7zip.7zip", AppVendor="Igor Pavlov", AppName="7-Zip", etc.)
+   - Apply deferral: `AllowDefer = $false` (no question asked — user specified upfront)
+   - Apply language: EN, translate UI string to English (no question asked)
+   - Apply force countdown: default 300s (user didn't specify, so use default)
+   - Ask user to validate process names (always required)
+3. **→ Application Packing agent**:
+   - Run: `Invoke-IntunewinUtil.ps1 -PackagePath "C:\...\Install-7-Zip-PSADTv4"`
+   - Verify `.intunewin` created successfully
+4. **→ Application Sandbox agent**:
+   - Run: `Invoke-Test.ps1 -PackagePath "C:\...\Invoke-AppDeployToolkit.intunewin"`
+   - Poll for `.code` file → Detect `0.code` → Report SUCCESS
+5. **Display validation summary**
+6. **Skip upload confirmation** (user already said "upload application" upfront)
+7. **→ Application Information agent** (icon search):
+   - Search for 7-Zip icon → Download to Assets folder (if found)
+8. **→ Application Upload agent** (pass: detection preference = file path from detection.csv):
+   - Read detection.csv → Extract `UninstallString`: `"C:\Program Files\7-Zip\Uninstall.exe"` → File detection
+   - Collect OAuth token from user
+   - Configure deployment modes (default: Both Interactive)
+   - Pass `-Detection "C:\Program Files\7-Zip\Uninstall.exe"` to upload script
    - Upload to Intune
    - Report: "App uploaded! Intune App ID: abc123-def456"
 9. **Report final summary** with workflow duration
