@@ -57,7 +57,7 @@ Before starting the workflow, verify the following:
 - **CSV Detection** (default): Uses `detection.csv` file in the working folder to define detection rules
 - **Custom PowerShell Script** (alternative): If user explicitly provides a `.ps1` script path, use PowerShell detection
 
-**detection.csv Location**: `{WorkingFolder}\detection.csv` — this file is located in the root of the package working folder (e.g., `Install-7-Zip-PSADTv4\detection.csv`).
+**detection.csv Location**: `{WorkingFolder}\detection.csv` — this file is located in the root of the package working folder (e.g., `C:\Users\mhorbacz\OneDrive - Euvic\Clients\Applications\Install-7-Zip-PSADTv4\detection.csv`).
 
 **Default Behavior**:
 1. Check if `detection.csv` exists in the working folder (`{WorkingFolder}\detection.csv`)
