@@ -130,7 +130,7 @@ function Install-ADTDeployment {
     $saiwParams = @{
         AllowDefer      = $true
         DeferTimes      = 1
-        ForceCountdown  = '300'
+        ForceCountdown  = 300
         PersistPrompt   = $true
         NotTopMost      = $true
         Subtitle        = "Aplikacja zarządzana przez Microsoft Intune"
@@ -236,7 +236,7 @@ function Uninstall-ADTDeployment {
     $saiwParams = @{
         AllowDefer      = $false
         DeferTimes      = 1
-        ForceCountdown  = '300'
+        ForceCountdown  = 300
         PersistPrompt   = $true
         NotTopMost      = $true
         Subtitle        = "Aplikacja zarządzana przez Microsoft Intune"
@@ -302,7 +302,7 @@ function Repair-ADTDeployment {
     $saiwParams = @{
         AllowDefer      = $true
         DeferTimes      = 1
-        ForceCountdown  = '300'
+        ForceCountdown  = 300
         PersistPrompt   = $true
         NotTopMost      = $true
         Subtitle        = "Aplikacja zarządzana przez Microsoft Intune"
