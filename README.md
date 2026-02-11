@@ -82,9 +82,17 @@ Although the agent works without WinGet MCP (it'll just use PowerShell to run Wi
 ![alt text](assets/image-1.png)
 ![alt text](assets/image-3.png)
 
-#### Step 3: Create Your App Agent
+#### Step 3: Create Your App Agents
 
-This is the fun part!
+This is the fun part! The application workflow is split into specialized agents that work together:
+
+| Agent | File | What It Does |
+|-------|------|-------------|
+| **Application Agent** (main) | [`Application Agent.agent.md`](Agent/Application%20Agent.agent.md) | Orchestrates the full workflow, delegates to sub-agents |
+| **Application Information** | [`Application Information.agent.md`](Agent/Application%20Information.agent.md) | WinGet discovery, workspace setup, configuration, icon search |
+| **Application Packing** | [`Application Packing.agent.md`](Agent/Application%20Packing.agent.md) | Creates `.intunewin` packages |
+| **Application Sandbox** | [`Application Sandbox.agent.md`](Agent/Application%20Sandbox.agent.md) | Tests packages in Windows Sandbox |
+| **Application Upload** | [`Application Upload.agent.md`](Agent/Application%20Upload.agent.md) | Uploads packages to Microsoft Intune |
 
 **Click on `Configure Custom Agent`:**
 
@@ -96,11 +104,11 @@ This is the fun part!
 
 **Now the easy part:**
 - Pick where to save your agent config
-- Name it "Application Agent" (or whatever makes you happy)
-- Copy all the contents from [`Application Agent.agent.md`](Agent/Application%20Agent.agent.md)
-- Paste it in and save
+- Create the main **Application Agent** by copying contents from [`Application Agent.agent.md`](Agent/Application%20Agent.agent.md)
+- Repeat for each sub-agent (Application Information, Application Packing, Application Sandbox, Application Upload)
+- You can use the main agent on its own — it coordinates the sub-agents automatically
 
-Boom! You've got yourself an AI agent.
+Boom! You've got yourself a team of AI agents.
 
 ### How to Use This Thing
 
